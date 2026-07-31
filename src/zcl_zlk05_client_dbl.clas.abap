@@ -83,7 +83,7 @@ CLASS zcl_zlk05_client_dbl IMPLEMENTATION.
 
   METHOD has_event.
     LOOP AT mt_events INTO DATA(lv_entry).
-      SPLIT lv_entry AT `|` INTO DATA(lv_name) DATA(lv_args).
+      SPLIT lv_entry AT `|` INTO DATA(lv_name) DATA(lv_args) ##NEEDED.
       IF lv_name = iv_name.
         result = abap_true.
         RETURN.
@@ -93,7 +93,7 @@ CLASS zcl_zlk05_client_dbl IMPLEMENTATION.
 
   METHOD has_event_arg.
     LOOP AT mt_events INTO DATA(lv_entry).
-      SPLIT lv_entry AT `|` INTO DATA(lv_name) DATA(lv_args).
+      SPLIT lv_entry AT `|` INTO DATA(lv_name) DATA(lv_args) ##NEEDED.
       IF lv_args IS NOT INITIAL AND find( val = lv_args sub = iv_sub ) >= 0.
         result = abap_true.
         RETURN.
@@ -130,7 +130,7 @@ CLASS zcl_zlk05_client_dbl IMPLEMENTATION.
     DATA(lv_xml) = COND string( WHEN iv_xml IS SUPPLIED THEN iv_xml ELSE mv_view ).
     parse( lv_xml ).
 
-    DATA(lo_nodes) = mo_doc->get_elements_by_tag_name( name = iv_name ).
+    DATA(lo_nodes) = mo_doc->get_elements_by_tag_name( iv_name ).
     DATA(lo_iter)  = lo_nodes->create_iterator( ).
 
     DO.
@@ -180,7 +180,7 @@ CLASS zcl_zlk05_client_dbl IMPLEMENTATION.
     DATA(lv_xml) = COND string( WHEN iv_xml IS SUPPLIED THEN iv_xml ELSE mv_view ).
     parse( lv_xml ).
 
-    DATA(lo_node) = mo_doc->find_from_name( name = iv_name ).
+    DATA(lo_node) = mo_doc->find_from_name( iv_name ).
     IF lo_node IS NOT BOUND.
       result = -1.
       RETURN.

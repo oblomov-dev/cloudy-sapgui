@@ -1,0 +1,49 @@
+// Formatting and style rules that abaplint can fix on its own.
+// Run via `npm run auto_fix`, wired to a weekly workflow.
+{
+  "global": {
+    "files": "/../../src/**/*.*"
+  },
+  "dependencies": [
+    {
+      "url": "https://github.com/abap2UI5/abap2UI5",
+      "folder": "/deps/abap2ui5",
+      "files": "/src/**/*.*"
+    },
+    {
+      "url": "https://github.com/abap2UI5/ai-demokit",
+      "folder": "/deps/ai-demokit",
+      "files": "/src/z2ui5_cl_ai_xml.clas.*"
+    },
+    {
+      "url": "https://github.com/abapedia/steampunk-2305-api-intersect-702",
+      "folder": "/deps/steampunk",
+      "files": "/src/**/*.*"
+    }
+  ],
+  "syntax": {
+    "version": "v750",
+    "errorNamespace": "^(Z|Y)",
+    "globalConstants": [
+      "seok_access_modify"
+    ]
+  },
+  // "double_space", "line_only_punc" and "indentation" are deliberately
+  // left out - the view builders align their `)->a( n = ... v = ... )`
+  // chains by hand and the fixes would flatten that.
+  "rules": {
+    "colon_missing_space": true,
+    "contains_tab": true,
+    "empty_statement": true,
+    "keyword_case": true,
+    "omit_parameter_name": true,
+    "omit_receiving": true,
+    "prefer_is_not": true,
+    "prefer_xsdbool": true,
+    "space_before_colon": true,
+    "space_before_dot": true,
+    "unnecessary_chaining": true,
+    "unnecessary_return": true,
+    "whitespace_end": true
+  }
+}

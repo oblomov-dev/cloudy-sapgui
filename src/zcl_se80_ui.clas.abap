@@ -193,10 +193,12 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         mv_edit_mode = xsdbool( mv_edit_mode = abap_false ).
       WHEN 'SAVE'.
         IF mv_source IS INITIAL.
-          mv_message = `Source code is empty.`. mv_msg_type = `Error`.
+          mv_message  = `Source code is empty.`.
+          mv_msg_type = `Error`.
         ELSE.
           DATA(ls_s) = mo_api->save_source( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type iv_source = mv_source ).
-          mv_message = ls_s-message. mv_msg_type = COND #( WHEN ls_s-success = abap_true THEN `Success` ELSE `Error` ).
+          mv_message  = ls_s-message.
+          mv_msg_type = COND #( WHEN ls_s-success = abap_true THEN `Success` ELSE `Error` ).
           APPEND VALUE ty_s_log(
             icon = COND #( WHEN ls_s-success = abap_true THEN `sap-icon://sys-enter-2` ELSE `sap-icon://error` )
             type = COND #( WHEN ls_s-success = abap_true THEN `Success` ELSE `Error` )
@@ -204,12 +206,15 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         ENDIF.
       WHEN 'ACTIVATE'.
         DATA(ls_a) = mo_api->activate_object( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type ).
-        mv_message = ls_a-message. mv_msg_type = COND #( WHEN ls_a-success = abap_true THEN `Success` ELSE `Error` ).
+        mv_message  = ls_a-message.
+        mv_msg_type = COND #( WHEN ls_a-success = abap_true THEN `Success` ELSE `Error` ).
         APPEND VALUE ty_s_log(
           icon = COND #( WHEN ls_a-success = abap_true THEN `sap-icon://sys-enter-2` ELSE `sap-icon://error` )
           type = COND #( WHEN ls_a-success = abap_true THEN `Success` ELSE `Error` )
           message = ls_a-message ) TO mt_log.
-        IF ls_a-success = abap_true. load_object( ). ENDIF.
+        IF ls_a-success = abap_true.
+          load_object( ).
+        ENDIF.
       WHEN 'CHECK'.
         DATA(lt_c) = mo_api->check_syntax( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type iv_source = mv_source ).
         IF lt_c IS NOT INITIAL.
@@ -232,7 +237,8 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         ENDIF.
       WHEN 'PRETTY_PRINT'.
         mv_source = mo_api->pretty_print( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type iv_source = mv_source ).
-        mv_message = `Pretty Printer executed.`. mv_msg_type = `Success`.
+        mv_message  = `Pretty Printer executed.`.
+        mv_msg_type = `Success`.
       WHEN 'WHERE_USED'.
         mt_usages = mo_api->get_where_used( mv_cur_obj_name ).
         mv_popup_title = |Where-Used List: { mv_cur_obj_name }|.
@@ -242,7 +248,8 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         client->popup_destroy( ).
       WHEN 'USAGE_CLICK'.
         IF lines( lt_arg ) >= 2.
-          mv_cur_obj_name = lt_arg[ 1 ]. mv_cur_obj_type = lt_arg[ 2 ].
+          mv_cur_obj_name = lt_arg[ 1 ].
+          mv_cur_obj_type = lt_arg[ 2 ].
           mv_show_whereu = abap_false.
           client->popup_destroy( ).
           load_object( ).
@@ -349,7 +356,9 @@ CLASS zcl_se80_ui IMPLEMENTATION.
           DATA lv_o TYPE i.
           DO.
             FIND lv_fl IN SECTION OFFSET lv_o OF lv_sl MATCH OFFSET DATA(lv_mo).
-            IF sy-subrc <> 0. EXIT. ENDIF.
+            IF sy-subrc <> 0.
+              EXIT.
+            ENDIF.
             lv_cnt2 = lv_cnt2 + 1.
             IF lv_fline = 0.
               DATA lv_nl TYPE i.
@@ -399,7 +408,7 @@ CLASS zcl_se80_ui IMPLEMENTATION.
       otype = mv_cur_obj_type
     ) INTO mt_recent INDEX 1.
     IF lines( mt_recent ) > 20.
-      DELETE mt_recent FROM 21.
+      DELETE mt_recent FROM 21 TO lines( mt_recent ).
     ENDIF.
     mv_recent_key = mv_cur_obj_name.
     " Add to navigation history
@@ -413,9 +422,13 @@ CLASS zcl_se80_ui IMPLEMENTATION.
       mv_hist_pos = lines( mt_history ).
     ENDIF.
     DATA(ls) = mo_api->load_source( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type ).
-    mv_source = ls-source. mv_source_local = ls-source_local. mv_source_test = ls-source_test. mv_syntax_mode = ls-syntax_mode.
+    mv_source       = ls-source.
+    mv_source_local = ls-source_local.
+    mv_source_test  = ls-source_test.
+    mv_syntax_mode  = ls-syntax_mode.
     IF ls-success = abap_false AND ls-message IS NOT INITIAL.
-      mv_message = ls-message. mv_msg_type = `Warning`.
+      mv_message  = ls-message.
+      mv_msg_type = `Warning`.
     ENDIF.
     mo_api->get_metadata( EXPORTING iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type
                           IMPORTING et_methods = mt_methods et_fields = mt_fields ).
