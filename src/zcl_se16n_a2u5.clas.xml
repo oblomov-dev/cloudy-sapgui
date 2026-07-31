@@ -5,11 +5,12 @@
    <VSEOCLASS>
     <CLSNAME>ZCL_SE16N_A2U5</CLSNAME>
     <LANGU>E</LANGU>
-    <DESCRIPT>SE16N-style Generic Data Browser (abap2UI5)</DESCRIPT>
+    <DESCRIPT>General Table Display (abap2UI5)</DESCRIPT>
     <STATE>1</STATE>
     <CLSCCINCL>X</CLSCCINCL>
     <FIXPT>X</FIXPT>
     <UNICODE>X</UNICODE>
+    <WITH_UNIT_TESTS>X</WITH_UNIT_TESTS>
    </VSEOCLASS>
   </asx:values>
  </asx:abap>

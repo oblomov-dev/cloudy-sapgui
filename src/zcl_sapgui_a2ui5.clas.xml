@@ -5,11 +5,12 @@
    <VSEOCLASS>
     <CLSNAME>ZCL_SAPGUI_A2UI5</CLSNAME>
     <LANGU>E</LANGU>
-    <DESCRIPT>SAP GUI - Easy Access Launcher (abap2UI5)</DESCRIPT>
+    <DESCRIPT>SAP Easy Access (abap2UI5)</DESCRIPT>
     <STATE>1</STATE>
     <CLSCCINCL>X</CLSCCINCL>
     <FIXPT>X</FIXPT>
     <UNICODE>X</UNICODE>
+    <WITH_UNIT_TESTS>X</WITH_UNIT_TESTS>
    </VSEOCLASS>
   </asx:values>
  </asx:abap>

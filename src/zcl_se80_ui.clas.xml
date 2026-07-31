@@ -5,11 +5,12 @@
    <VSEOCLASS>
     <CLSNAME>ZCL_SE80_UI</CLSNAME>
     <LANGU>E</LANGU>
-    <DESCRIPT>SE80 Lite - abap2UI5 Frontend (uses ZCL_SE80_API)</DESCRIPT>
+    <DESCRIPT>Object Navigator (abap2UI5)</DESCRIPT>
     <STATE>1</STATE>
     <CLSCCINCL>X</CLSCCINCL>
     <FIXPT>X</FIXPT>
     <UNICODE>X</UNICODE>
+    <WITH_UNIT_TESTS>X</WITH_UNIT_TESTS>
    </VSEOCLASS>
   </asx:values>
  </asx:abap>

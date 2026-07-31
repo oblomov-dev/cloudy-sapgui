@@ -529,7 +529,8 @@ CLASS zcl_se80_api IMPLEMENTATION.
       WHEN 'XSLT'.
         result-syntax_mode = `xml`.
         DATA lt_xslt TYPE STANDARD TABLE OF string.
-        DATA(lv_xn) = CONV syrepid( iv_name ).
+        DATA lv_xn TYPE syrepid.
+        lv_xn = iv_name.
         READ REPORT lv_xn INTO lt_xslt.
         IF sy-subrc = 0.
           result-source = concat_lines_of( table = lt_xslt sep = cl_abap_char_utilities=>newline ).
@@ -541,7 +542,8 @@ CLASS zcl_se80_api IMPLEMENTATION.
       WHEN 'TYPE'.
         result-syntax_mode = `abap`.
         DATA lt_tp TYPE STANDARD TABLE OF string.
-        DATA(lv_tp) = CONV syrepid( iv_name ).
+        DATA lv_tp TYPE syrepid.
+        lv_tp = iv_name.
         READ REPORT lv_tp INTO lt_tp.
         IF sy-subrc = 0.
           result-source = concat_lines_of( table = lt_tp sep = cl_abap_char_utilities=>newline ).
@@ -553,7 +555,8 @@ CLASS zcl_se80_api IMPLEMENTATION.
       WHEN OTHERS.
         result-syntax_mode = `abap`.
         DATA lt_src TYPE STANDARD TABLE OF string.
-        DATA(lv_rep) = CONV syrepid( iv_name ).
+        DATA lv_rep TYPE syrepid.
+        lv_rep = iv_name.
         READ REPORT lv_rep INTO lt_src.
         IF sy-subrc = 0.
           result-source = concat_lines_of( table = lt_src sep = cl_abap_char_utilities=>newline ).
@@ -571,7 +574,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
     TRY.
         DATA(lo_settings) = cl_oo_clif_source_settings=>create_instance( ).
         DATA(lo_src) = cl_oo_clif_source=>create_instance(
-          clif_name = CONV #( iv_name )
+          clif_name = iv_name
           version   = 'A'
           settings  = lo_settings ).
         DATA lt_source TYPE STANDARD TABLE OF string.
@@ -710,14 +713,19 @@ CLASS zcl_se80_api IMPLEMENTATION.
         TRY.
             DATA(lo_settings) = cl_oo_clif_source_settings=>create_instance( ).
             DATA(lo_src) = cl_oo_clif_source=>create_instance(
-              clif_name = CONV #( iv_name )
+              clif_name = iv_name
               version   = 'I'
               settings  = lo_settings ).
-            " Try to get lock - but continue even if it fails (local objects)
+            " Try to get the lock. Local ($TMP) objects cannot always be locked,
+            " so the save is still attempted - but the problem is REPORTED and no
+            " longer swallowed, otherwise another user's changes could silently be
+            " overwritten.
+            DATA lv_lock_warn TYPE string.
+            CLEAR lv_lock_warn.
             TRY.
                 lo_src->access_permission( access_mode = seok_access_modify ).
               CATCH cx_oo_access_permission INTO DATA(lx_lock).
-                " Ignore lock errors for $TMP packages
+                lv_lock_warn = | Warning: object could not be locked ({ lx_lock->get_text( ) }).|.
             ENDTRY.
             " Read current source to initialize internal state
             DATA lt_old TYPE STANDARD TABLE OF string.
@@ -727,9 +735,9 @@ CLASS zcl_se80_api IMPLEMENTATION.
             lo_src->if_oo_clif_source~save( ).
             COMMIT WORK AND WAIT.
             result-success = abap_true.
-            result-message = |{ iv_name } saved ({ lines( lt_source ) } lines).|.
+            result-message = |{ iv_name } saved ({ lines( lt_source ) } lines).{ lv_lock_warn }|.
           CATCH cx_root INTO DATA(lx).
-            result-message = |Save error: { lx->get_text( ) }|.
+            result-message = |{ iv_name } could not be saved: { lx->get_text( ) }|.
         ENDTRY.
 
       WHEN 'PROG' OR 'FUNC'.
@@ -800,7 +808,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
         TRY.
             DATA(lo_settings) = cl_oo_clif_source_settings=>create_instance( ).
             DATA(lo_src) = cl_oo_clif_source=>create_instance(
-              clif_name = CONV #( iv_name )
+              clif_name = iv_name
               version   = 'A'
               settings  = lo_settings ).
             DATA(ls_check) = lo_src->check( ).
@@ -1033,7 +1041,8 @@ CLASS zcl_se80_api IMPLEMENTATION.
     ENDIF.
     " Last changed info from TRDIR
     IF iv_type = 'PROG' OR iv_type = 'CLAS' OR iv_type = 'FUGR'.
-      DATA(lv_pn) = CONV syrepid( iv_name ).
+      DATA lv_pn TYPE syrepid.
+      lv_pn = iv_name.
       SELECT SINGLE unam, udat FROM trdir WHERE name = @lv_pn INTO @DATA(ls_ch).
       IF sy-subrc = 0 AND ls_ch-unam IS NOT INITIAL.
         APPEND VALUE #( label = `Changed by` value = CONV string( ls_ch-unam ) ) TO result.
@@ -1205,10 +1214,10 @@ CLASS zcl_se80_api IMPLEMENTATION.
         TRY.
             DATA(lo_s) = cl_oo_clif_source_settings=>create_instance( ).
             DATA(lo_act) = cl_oo_clif_source=>create_instance(
-              clif_name = CONV #( iv_name ) version = 'A' settings = lo_s ).
+              clif_name = iv_name version = 'A' settings = lo_s ).
             lo_act->if_oo_clif_source~get_source( IMPORTING source = lt_active ).
             DATA(lo_inact) = cl_oo_clif_source=>create_instance(
-              clif_name = CONV #( iv_name ) version = 'I' settings = lo_s ).
+              clif_name = iv_name version = 'I' settings = lo_s ).
             lo_inact->if_oo_clif_source~get_source( IMPORTING source = lt_inactive ).
           CATCH cx_root INTO DATA(lx).
             result = |Error: { lx->get_text( ) }|.
@@ -1429,7 +1438,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
                 EXPORTING
                   wi_tadir_pgmid    = 'R3TR'
                   wi_tadir_object   = 'PROG'
-                  wi_tadir_obj_name = CONV sobj_name( iv_new_name )
+                  wi_tadir_obj_name = iv_new_name
                   wi_tadir_devclass = lv_pkg
                   wi_test_modus     = space
                 EXCEPTIONS OTHERS = 0.
@@ -1437,7 +1446,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
             " Delete old
             CALL FUNCTION 'RS_DELETE_PROGRAM'
               EXPORTING
-                program   = CONV syrepid( iv_old_name )
+                program   = iv_old_name
                 suppress_popup = abap_true
               EXCEPTIONS OTHERS = 0.
             COMMIT WORK.
@@ -1637,7 +1646,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
   METHOD create_interface.
     TRY.
         DATA ls_intf TYPE vseointerf.
-        ls_intf-clsname = CONV #( iv_name ).
+        ls_intf-clsname = iv_name.
         ls_intf-langu = sy-langu.
         ls_intf-descript = |Interface { iv_name }|.
         ls_intf-state = 1.
@@ -1698,7 +1707,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
   METHOD create_class.
     TRY.
         DATA(ls_class) = VALUE vseoclass(
-          clsname  = CONV #( iv_name )
+          clsname  = iv_name
           langu    = sy-langu
           descript = |Class { iv_name }|
           state    = 1
@@ -1756,7 +1765,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
               EXPORTING
                 wi_tadir_pgmid    = 'R3TR'
                 wi_tadir_object   = 'PROG'
-                wi_tadir_obj_name = CONV sobj_name( iv_target_name )
+                wi_tadir_obj_name = iv_target_name
                 wi_tadir_devclass = iv_package
                 wi_test_modus     = space
               EXCEPTIONS
@@ -1811,7 +1820,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
         EXPORTING
           wi_tadir_pgmid    = 'R3TR'
           wi_tadir_object   = 'PROG'
-          wi_tadir_obj_name = CONV sobj_name( iv_name )
+          wi_tadir_obj_name = iv_name
           wi_tadir_devclass = iv_package
           wi_test_modus     = space
         EXCEPTIONS
@@ -1857,7 +1866,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
       WHEN 'PROG'.
         CALL FUNCTION 'RS_DELETE_PROGRAM'
           EXPORTING
-            program            = CONV syrepid( iv_name )
+            program            = iv_name
             suppress_popup     = abap_true
             skip_no_release_check = abap_true
           EXCEPTIONS
@@ -1877,7 +1886,7 @@ CLASS zcl_se80_api IMPLEMENTATION.
         TRY.
             CALL FUNCTION 'SEO_CLASS_DELETE_COMPLETE'
               EXPORTING
-                clskey = VALUE seoclskey( clsname = CONV #( iv_name ) )
+                clskey = VALUE seoclskey( clsname = iv_name )
               EXCEPTIONS
                 not_existing     = 1
                 is_interface     = 2
@@ -2007,7 +2016,8 @@ CLASS zcl_se80_api IMPLEMENTATION.
     CASE iv_type.
       WHEN 'PROG' OR 'CLAS' OR 'FUGR'.
         DATA lt_textpool TYPE STANDARD TABLE OF textpool.
-        DATA(lv_prog) = CONV syrepid( iv_name ).
+        DATA lv_prog TYPE syrepid.
+        lv_prog = iv_name.
         READ TEXTPOOL lv_prog INTO lt_textpool LANGUAGE 'E'.
         IF sy-subrc <> 0.
           READ TEXTPOOL lv_prog INTO lt_textpool LANGUAGE sy-langu.

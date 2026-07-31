@@ -11,7 +11,7 @@ CLASS zcl_se80_ui DEFINITION PUBLIC.
     DATA mv_source_local TYPE string.
     DATA mv_source_test  TYPE string.
     DATA mv_search       TYPE string.
-    DATA mv_search_type  TYPE string.
+    DATA mv_search_type  TYPE string VALUE 'ALL'.
     DATA mv_object_title TYPE string.
     DATA mv_active_tab   TYPE string VALUE 'SRC'.
     DATA mt_methods      TYPE zcl_se80_api=>ty_t_method.
@@ -22,6 +22,7 @@ CLASS zcl_se80_ui DEFINITION PUBLIC.
     DATA mv_message      TYPE string.
     DATA mv_msg_type     TYPE string.
     DATA mv_show_whereu  TYPE abap_bool.
+    DATA mv_popup_title  TYPE string.
     DATA mv_syntax_mode  TYPE string VALUE 'abap'.
     DATA mv_text_elem    TYPE string.
     DATA mv_docu         TYPE string.
@@ -52,6 +53,8 @@ CLASS zcl_se80_ui DEFINITION PUBLIC.
         otype TYPE string,
       END OF ty_s_recent.
     DATA mt_recent TYPE STANDARD TABLE OF ty_s_recent WITH EMPTY KEY.
+    "! selectedKey of the "recent objects" dropdown - read on RECENT_CLICK
+    DATA mv_recent_key TYPE string.
 
     " Bottom log panel
     TYPES:
@@ -70,6 +73,16 @@ CLASS zcl_se80_ui DEFINITION PUBLIC.
     METHODS view_display.
     METHODS on_event.
     METHODS load_object.
+    "! Repository Browser (left column)
+    METHODS build_browser
+      IMPORTING io_parent TYPE REF TO z2ui5_cl_ai_xml.
+    "! Object editor (right column)
+    METHODS build_editor
+      IMPORTING io_parent TYPE REF TO z2ui5_cl_ai_xml.
+    "! Where-Used List / Used Objects popup - built on its OWN factory so that
+    "! stringify( ) returns a single, well formed root element
+    METHODS build_popup
+      RETURNING VALUE(result) TYPE string.
   PRIVATE SECTION.
 ENDCLASS.
 
@@ -99,22 +112,22 @@ CLASS zcl_se80_ui IMPLEMENTATION.
       WHEN 'TREE_CLICK'.
         IF lines( lt_arg ) >= 2.
           IF lt_arg[ 2 ] = 'DEVC'.
-            mv_cur_package = CONV devclass( lt_arg[ 1 ] ).
+            mv_cur_package = lt_arg[ 1 ].
             mt_tree = mo_api->get_package_tree( mv_cur_package ).
             mt_props = mo_api->get_package_info( mv_cur_package ).
-            mv_object_title = |Package: { mv_cur_package }|.
+            mv_object_title = |Package { mv_cur_package }|.
             mv_active_tab = 'INFO'.
             CLEAR: mv_source, mv_source_local, mv_source_test, mv_cur_obj_name, mt_methods, mt_fields.
           ELSEIF lt_arg[ 2 ] = 'METH'.
             " Method clicked - navigate to class and show signature
             DATA(lv_meth_key) = lt_arg[ 1 ].
             SPLIT lv_meth_key AT '=>' INTO DATA(lv_cls) DATA(lv_mtd).
-            mv_cur_obj_name = CONV sobj_name( lv_cls ).
+            mv_cur_obj_name = lv_cls.
             mv_cur_obj_type = 'CLAS'.
             load_object( ).
             " Get method signature and show in fields
             mt_fields = mo_api->get_method_signature(
-              iv_classname = mv_cur_obj_name iv_methodname = CONV #( lv_mtd ) ).
+              iv_classname = mv_cur_obj_name iv_methodname = lv_mtd ).
             " Find method line in source
             DATA(lv_search) = |method { to_lower( lv_mtd ) }|.
             DATA(lv_pos) = find( val = to_lower( mv_source ) sub = lv_search ).
@@ -127,15 +140,15 @@ CLASS zcl_se80_ui IMPLEMENTATION.
                 ENDIF.
                 lv_cnt = lv_cnt + 1.
               ENDDO.
-              mv_message = |Method { lv_mtd } at line { lv_line }|.
+              mv_message = |Method { lv_mtd } in line { lv_line }|.
             ELSE.
-              mv_message = |Method { lv_mtd } - signature shown in Properties|.
+              mv_message = |Method { lv_mtd } - signature displayed under Properties|.
             ENDIF.
             mv_msg_type = `Information`.
             mv_active_tab = 'INFO'.
           ELSE.
-            mv_cur_obj_name = CONV sobj_name( lt_arg[ 1 ] ).
-            mv_cur_obj_type = CONV trobjtype( lt_arg[ 2 ] ).
+            mv_cur_obj_name = lt_arg[ 1 ].
+            mv_cur_obj_type = lt_arg[ 2 ].
             load_object( ).
           ENDIF.
         ENDIF.
@@ -159,22 +172,28 @@ CLASS zcl_se80_ui IMPLEMENTATION.
           mv_cur_package = lv_p.
           mt_tree = mo_api->get_package_tree( mv_cur_package ).
           CLEAR: mv_source, mv_source_local, mv_source_test, mv_cur_obj_name, mv_object_title, mt_methods, mt_fields, mt_props.
+        ELSE.
+          mv_message = |Package { mv_cur_package } has no superpackage.|.
+          mv_msg_type = `Information`.
         ENDIF.
       WHEN 'SEARCH'.
         IF mv_search IS NOT INITIAL.
           DATA lv_tf TYPE trobjtype.
           IF mv_search_type IS NOT INITIAL AND mv_search_type <> 'ALL'.
-            lv_tf = CONV trobjtype( mv_search_type ).
+            lv_tf = mv_search_type.
           ENDIF.
           mt_tree = mo_api->search_objects( iv_pattern = mv_search iv_type = lv_tf ).
-          mv_object_title = |Search: { lines( mt_tree ) } hits|.
+          mv_object_title = |Object list: { lines( mt_tree ) } hits|.
           CLEAR: mv_source, mv_source_local, mv_source_test.
+        ELSE.
+          mv_message = `Enter an object name.`.
+          mv_msg_type = `Warning`.
         ENDIF.
       WHEN 'TOGGLE_EDIT'.
         mv_edit_mode = xsdbool( mv_edit_mode = abap_false ).
       WHEN 'SAVE'.
         IF mv_source IS INITIAL.
-          mv_message = `Source is empty.`. mv_msg_type = `Error`.
+          mv_message = `Source code is empty.`. mv_msg_type = `Error`.
         ELSE.
           DATA(ls_s) = mo_api->save_source( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type iv_source = mv_source ).
           mv_message = ls_s-message. mv_msg_type = COND #( WHEN ls_s-success = abap_true THEN `Success` ELSE `Error` ).
@@ -202,26 +221,31 @@ CLASS zcl_se80_ui IMPLEMENTATION.
               icon    = COND #( WHEN <chk>-type = 'E' THEN `sap-icon://error`
                                 WHEN <chk>-type = 'W' THEN `sap-icon://alert` ELSE `sap-icon://sys-enter-2` )
               type    = COND #( WHEN <chk>-type = 'E' THEN `Error` WHEN <chk>-type = 'W' THEN `Warning` ELSE `Success` )
-              line    = COND #( WHEN <chk>-line > 0 THEN |Ln { <chk>-line }| )
+              line    = COND #( WHEN <chk>-line > 0 THEN |Line { <chk>-line }| )
               message = <chk>-message
             ) TO mt_log.
           ENDLOOP.
         ELSE.
-          mv_message = `Syntax OK.`.
+          mv_message = `No syntax errors found.`.
           mv_msg_type = `Success`.
-          APPEND VALUE ty_s_log( icon = `sap-icon://sys-enter-2` type = `Success` message = `Syntax check passed.` ) TO mt_log.
+          APPEND VALUE ty_s_log( icon = `sap-icon://sys-enter-2` type = `Success` message = `No syntax errors found.` ) TO mt_log.
         ENDIF.
       WHEN 'PRETTY_PRINT'.
         mv_source = mo_api->pretty_print( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type iv_source = mv_source ).
-        mv_message = `Formatted.`. mv_msg_type = `Success`.
+        mv_message = `Pretty Printer executed.`. mv_msg_type = `Success`.
       WHEN 'WHERE_USED'.
-        mt_usages = mo_api->get_where_used( mv_cur_obj_name ). mv_show_whereu = abap_true.
+        mt_usages = mo_api->get_where_used( mv_cur_obj_name ).
+        mv_popup_title = |Where-Used List: { mv_cur_obj_name }|.
+        mv_show_whereu = abap_true.
       WHEN 'CLOSE_WHEREU'.
         mv_show_whereu = abap_false.
+        client->popup_destroy( ).
       WHEN 'USAGE_CLICK'.
         IF lines( lt_arg ) >= 2.
-          mv_cur_obj_name = CONV sobj_name( lt_arg[ 1 ] ). mv_cur_obj_type = CONV trobjtype( lt_arg[ 2 ] ).
-          mv_show_whereu = abap_false. load_object( ).
+          mv_cur_obj_name = lt_arg[ 1 ]. mv_cur_obj_type = lt_arg[ 2 ].
+          mv_show_whereu = abap_false.
+          client->popup_destroy( ).
+          load_object( ).
         ENDIF.
       WHEN 'CREATE_OBJ'.
         " Create program or class (based on search type filter)
@@ -252,7 +276,7 @@ CLASS zcl_se80_ui IMPLEMENTATION.
             load_object( ).
           ENDIF.
         ELSE.
-          mv_message = `Enter name in search field, select type.`.
+          mv_message = `Enter the object name in the search field and choose the object type.`.
           mv_msg_type = `Warning`.
         ENDIF.
       WHEN 'CONFIRM_DELETE'.
@@ -280,7 +304,7 @@ CLASS zcl_se80_ui IMPLEMENTATION.
             mv_cur_obj_type = ls_qn-object.
             load_object( ).
           ELSE.
-            mv_message = |Object "{ mv_quick_nav }" not found.|.
+            mv_message = |Object { mv_quick_nav } does not exist.|.
             mv_msg_type = `Warning`.
           ENDIF.
         ENDIF.
@@ -288,31 +312,33 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         mv_dark_theme = xsdbool( mv_dark_theme = abap_false ).
       WHEN 'GOTO_LINE'.
         IF mv_goto_line IS NOT INITIAL.
-          mv_message = |Go to line { mv_goto_line } (use browser Ctrl+G in editor).|.
+          mv_message = |Position on line { mv_goto_line } (use Ctrl+G inside the editor).|.
           mv_msg_type = `Information`.
         ENDIF.
       WHEN 'FULLSCREEN'.
         mv_fullscreen = xsdbool( mv_fullscreen = abap_false ).
-      WHEN 'EXPAND_ALL'.
-        " Handled client-side via tree ID
-      WHEN 'COLLAPSE_ALL'.
-        " Handled client-side via tree ID
       WHEN 'REPLACE_ALL'.
         IF mv_find IS NOT INITIAL AND mv_edit_mode = abap_true.
           DATA lv_rep_count TYPE i.
           mo_api->search_replace_source(
             EXPORTING iv_source = mv_source iv_search = mv_find iv_replace = mv_replace
             IMPORTING ev_source = mv_source ev_count = lv_rep_count ).
-          mv_message = |Replaced { lv_rep_count } occurrence(s).|.
+          mv_message = |{ lv_rep_count } replacement(s) carried out.|.
           mv_msg_type = COND #( WHEN lv_rep_count > 0 THEN `Success` ELSE `Warning` ).
+        ELSEIF mv_edit_mode = abap_false.
+          mv_message = `Switch to change mode first.`.
+          mv_msg_type = `Warning`.
         ENDIF.
       WHEN 'COMPARE'.
         DATA(lv_diff) = mo_api->compare_versions( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type ).
         IF lv_diff IS NOT INITIAL.
           mv_source = lv_diff.
           mv_active_tab = 'SRC'.
-          mv_message = `Showing version comparison.`.
+          mv_message = `Version comparison displayed.`.
           mv_msg_type = `Information`.
+        ELSE.
+          mv_message = `No other version found.`.
+          mv_msg_type = `Warning`.
         ENDIF.
       WHEN 'FIND_IN_SOURCE'.
         IF mv_find IS NOT INITIAL AND mv_source IS NOT INITIAL.
@@ -332,31 +358,29 @@ CLASS zcl_se80_ui IMPLEMENTATION.
             ENDIF.
             lv_o = lv_mo + 1.
           ENDDO.
-          mv_message = COND #( WHEN lv_cnt2 > 0 THEN |Found { lv_cnt2 }x, first at line { lv_fline }| ELSE |"{ mv_find }" not found.| ).
+          mv_message = COND #( WHEN lv_cnt2 > 0 THEN |{ lv_cnt2 } hit(s), first one in line { lv_fline }| ELSE |{ mv_find } not found.| ).
           mv_msg_type = COND #( WHEN lv_cnt2 > 0 THEN `Success` ELSE `Warning` ).
         ENDIF.
       WHEN 'RECENT_CLICK'.
-        " Recent object selected from dropdown
-        IF lines( lt_arg ) > 0.
-          DATA(lv_rkey) = lt_arg[ 1 ].
-          READ TABLE mt_recent WITH KEY key = lv_rkey ASSIGNING FIELD-SYMBOL(<recent>).
+        " Object selected from the "recent objects" dropdown. The selected key is
+        " read from the two-way bound selectedKey, not from an event argument.
+        IF mv_recent_key IS NOT INITIAL.
+          READ TABLE mt_recent WITH KEY key = mv_recent_key ASSIGNING FIELD-SYMBOL(<recent>).
           IF sy-subrc = 0.
-            mv_cur_obj_name = CONV sobj_name( <recent>-key ).
-            mv_cur_obj_type = CONV trobjtype( <recent>-otype ).
+            mv_cur_obj_name = <recent>-key.
+            mv_cur_obj_type = <recent>-otype.
             load_object( ).
           ENDIF.
         ENDIF.
       WHEN 'DELETE_OBJ'.
         " Show confirmation - just set flag, actual delete in CONFIRM_DELETE
-        mv_message = |Delete { mv_cur_obj_name }? Click Delete again to confirm.|.
+        mv_message = |Delete object { mv_cur_obj_name }? Choose Delete again to confirm.|.
         mv_msg_type = `Warning`.
       WHEN 'SHOW_DEPS'.
         " Show object dependencies
         mt_usages = mo_api->get_object_dependencies( iv_name = mv_cur_obj_name iv_type = mv_cur_obj_type ).
+        mv_popup_title = |Used Objects: { mv_cur_obj_name }|.
         mv_show_whereu = abap_true.
-      WHEN 'SHOW_HELP'.
-        mv_message = |Shortcuts: Enter in Find=Search, Enter in Replace=Replace All, Enter in Line=Goto, Enter in Jump=Navigate|.
-        mv_msg_type = `Information`.
       WHEN 'REFRESH'.
         mt_tree = mo_api->get_package_tree( mv_cur_package ).
       WHEN OTHERS.
@@ -366,17 +390,18 @@ CLASS zcl_se80_ui IMPLEMENTATION.
 
 
   METHOD load_object.
-    mv_object_title = |{ mv_cur_obj_type } - { mv_cur_obj_name }|.
+    mv_object_title = |{ mv_cur_obj_type } { mv_cur_obj_name }|.
     " Add to recent objects (max 20, no duplicates)
-    DELETE mt_recent WHERE key = CONV string( mv_cur_obj_name ).
+    DELETE mt_recent WHERE key = mv_cur_obj_name.
     INSERT VALUE ty_s_recent(
       text  = |{ mv_cur_obj_name } [{ mv_cur_obj_type }]|
-      key   = CONV string( mv_cur_obj_name )
-      otype = CONV string( mv_cur_obj_type )
+      key   = mv_cur_obj_name
+      otype = mv_cur_obj_type
     ) INTO mt_recent INDEX 1.
     IF lines( mt_recent ) > 20.
       DELETE mt_recent FROM 21.
     ENDIF.
+    mv_recent_key = mv_cur_obj_name.
     " Add to navigation history
     IF mv_hist_pos = 0 OR
        ( mv_hist_pos > 0 AND mt_history[ mv_hist_pos ]-obj_name <> mv_cur_obj_name ).
@@ -486,6 +511,7 @@ CLASS zcl_se80_ui IMPLEMENTATION.
 
 
   METHOD view_display.
+
     DATA(view) = z2ui5_cl_ai_xml=>factory( ).
 
     DATA(page) = view->open( n = `View` ns = `mvc`
@@ -496,403 +522,520 @@ CLASS zcl_se80_ui IMPLEMENTATION.
         )->a( n = `height`     v = `100%`
         )->open( `App`
         )->open( `Page`
-            )->a( n = `title` v = `Object Navigator`
-            )->a( n = `showHeader` v = `true`
-            )->a( n = `enableScrolling` v = `false` ).
+            )->a( n = `title`           v = `Object Navigator`
+            )->a( n = `showHeader`      v = `true`
+            )->a( n = `enableScrolling` v = `false`
+            )->a( n = `showNavButton`   v = z2ui5_cl_ai_xml=>as_bool( client->check_app_prev_stack( ) )
+            )->a( n = `navButtonPress`  v = client->_event_nav_app_leave( ) ).
 
     DATA(flex) = page->open( `HBox`
-        )->a( n = `height` v = `100%`
-        )->a( n = `width` v = `100%`
+        )->a( n = `height`     v = `100%`
+        )->a( n = `width`      v = `100%`
         )->a( n = `alignItems` v = `Stretch` ).
 
-    " ===== LEFT: Repository Browser =====
     IF mv_fullscreen = abap_false.
-    DATA(lo_l) = flex->open( `VBox` )->a( n = `width` v = `320px` ).
+      build_browser( flex ).
+    ENDIF.
+    build_editor( flex ).
 
-    " Package path with navigation
-    lo_l->open( `Toolbar` )->a( n = `height` v = `2.5rem` ).
-    lo_l->leaf( `Button`
-        )->a( n = `icon` v = `sap-icon://nav-back`
-        )->a( n = `press` v = client->_event( `NAV_UP` )
-        )->a( n = `type` v = `Transparent` ).
-    lo_l->leaf( `Input`
-        )->a( n = `value` v = client->_bind( mv_cur_package )
-        )->a( n = `submit` v = client->_event( `REFRESH` )
-        )->a( n = `width` v = `200px`
-        )->a( n = `placeholder` v = `Package` ).
-    lo_l->leaf( `Button`
-        )->a( n = `icon` v = `sap-icon://display`
-        )->a( n = `press` v = client->_event( `REFRESH` )
-        )->a( n = `type` v = `Transparent` ).
-    lo_l->shut( ).
+    " The Where-Used List / Used Objects popup lives on its own factory, so the
+    " main view keeps exactly one root element.
+    IF mv_show_whereu = abap_true.
+      client->popup_display( build_popup( ) ).
+    ELSE.
+      client->view_display( view->stringify( ) ).
+    ENDIF.
 
-    " Search
-    lo_l->open( `HBox` )->a( n = `width` v = `100%` ).
-    lo_l->leaf( `SearchField`
-        )->a( n = `placeholder` v = `Object name...`
-        )->a( n = `value` v = client->_bind( mv_search )
-        )->a( n = `search` v = client->_event( `SEARCH` )
-        )->a( n = `width` v = `210px` ).
-    DATA(lo_sel) = lo_l->open( `Select`
+  ENDMETHOD.
+
+
+  METHOD build_browser.
+
+    " ===== Repository Browser (left column) =====
+    DATA(col) = io_parent->open( `VBox` )->a( n = `width` v = `320px` ).
+
+    " --- Package with navigation ---
+    DATA(bar1) = col->open( `Toolbar` )->a( n = `height` v = `2.5rem` ).
+    bar1->leaf( `Button`
+        )->a( n = `icon`    v = `sap-icon://nav-back`
+        )->a( n = `tooltip` v = `Superpackage`
+        )->a( n = `press`   v = client->_event( `NAV_UP` )
+        )->a( n = `type`    v = `Transparent`
+        )->leaf( `Input`
+            )->a( n = `value`       v = client->_bind( mv_cur_package )
+            )->a( n = `submit`      v = client->_event( `REFRESH` )
+            )->a( n = `width`       v = `200px`
+            )->a( n = `placeholder` v = `Package`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://display`
+            )->a( n = `tooltip` v = `Display`
+            )->a( n = `press`   v = client->_event( `REFRESH` )
+            )->a( n = `type`    v = `Transparent` ).
+
+    " --- Object search ---
+    DATA(bar2) = col->open( `Toolbar` )->a( n = `height` v = `2.5rem` ).
+    bar2->leaf( `SearchField`
+        )->a( n = `placeholder` v = `Object name`
+        )->a( n = `value`       v = client->_bind( mv_search )
+        )->a( n = `search`      v = client->_event( `SEARCH` )
+        )->a( n = `width`       v = `200px` ).
+    DATA(type_sel) = bar2->open( `Select`
         )->a( n = `selectedKey` v = client->_bind( mv_search_type )
-        )->a( n = `width` v = `105px` ).
-    lo_sel->open( `items` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `ALL` )->a( n = `text` v = `All` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `CLAS` )->a( n = `text` v = `Class` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `PROG` )->a( n = `text` v = `Prog` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `FUGR` )->a( n = `text` v = `FuGr` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `TABL` )->a( n = `text` v = `Table` ).
-    lo_sel->leaf( n = `Item` ns = `core` )->a( n = `key` v = `DDLS` )->a( n = `text` v = `CDS` ).
-    lo_sel->shut( )->shut( ).
-    lo_l->shut( ).
+        )->a( n = `width`       v = `105px`
+        )->a( n = `tooltip`     v = `Object type` ).
+    DATA(type_items) = type_sel->open( `items` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `ALL`  )->a( n = `text` v = `All` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `CLAS` )->a( n = `text` v = `Class` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `INTF` )->a( n = `text` v = `Interface` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `PROG` )->a( n = `text` v = `Program` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `FUGR` )->a( n = `text` v = `Func.Group` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `TABL` )->a( n = `text` v = `Table` ).
+    type_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `DDLS` )->a( n = `text` v = `CDS View` ).
 
-    " Recent objects + Tree toolbar
-    lo_l->open( `Toolbar` )->a( n = `height` v = `2rem` ).
+    " --- Recent objects + tree expand/collapse ---
+    DATA(bar3) = col->open( `Toolbar` )->a( n = `height` v = `2rem` ).
     IF mt_recent IS NOT INITIAL.
-      DATA(lo_rec) = lo_l->open( `Select`
-          )->a( n = `width` v = `160px`
-          )->a( n = `change` v = client->_event( val = `RECENT_CLICK` t_arg = VALUE #( ( `${$parameters>/selectedItem}` ) ) ) ).
-      lo_rec->open( `items` ).
+      DATA(rec_sel) = bar3->open( `Select`
+          )->a( n = `width`       v = `160px`
+          )->a( n = `tooltip`     v = `Recently used objects`
+          )->a( n = `selectedKey` v = client->_bind( mv_recent_key )
+          )->a( n = `change`      v = client->_event( `RECENT_CLICK` ) ).
+      DATA(rec_items) = rec_sel->open( `items` ).
       LOOP AT mt_recent ASSIGNING FIELD-SYMBOL(<rc>).
-        lo_rec->leaf( n = `Item` ns = `core`
-            )->a( n = `key` v = <rc>-key
+        rec_items->leaf( n = `Item` ns = `core`
+            )->a( n = `key`  v = <rc>-key
             )->a( n = `text` v = <rc>-text ).
       ENDLOOP.
-      lo_rec->shut( ).
-      lo_rec->shut( ).
     ENDIF.
-    lo_l->shut( ).
+    bar3->leaf( `ToolbarSpacer`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://expand-group`
+            )->a( n = `tooltip` v = `Expand`
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `press`   v = client->_event_client(
+                val   = client->cs_event-control_by_id
+                t_arg = VALUE #( ( `se80Tree` ) ( `expandToLevel` ) ( `3` ) ) )
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://collapse-group`
+            )->a( n = `tooltip` v = `Collapse`
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `press`   v = client->_event_client(
+                val   = client->cs_event-control_by_id
+                t_arg = VALUE #( ( `se80Tree` ) ( `collapseAll` ) ) ) ).
 
-    " Tree toolbar (Expand/Collapse)
-    lo_l->open( `Toolbar` )->a( n = `height` v = `2rem` ).
-    lo_l->leaf( `Button`
-        )->a( n = `icon` v = `sap-icon://expand-group`
-        )->a( n = `tooltip` v = `Expand All`
-        )->a( n = `type` v = `Transparent`
-        )->a( n = `press` v = client->_event_client(
-            val = client->cs_event-control_by_id
-            t_arg = VALUE #( ( `se80Tree` ) ( `expandToLevel` ) ( `3` ) ) ) ).
-    lo_l->leaf( `Button`
-        )->a( n = `icon` v = `sap-icon://collapse-group`
-        )->a( n = `tooltip` v = `Collapse All`
-        )->a( n = `type` v = `Transparent`
-        )->a( n = `press` v = client->_event_client(
-            val = client->cs_event-control_by_id
-            t_arg = VALUE #( ( `se80Tree` ) ( `collapseAll` ) ) ) ).
-    lo_l->shut( ).
-
-    " Tree in ScrollContainer (fixed height, scrolls internally)
+    " --- Object tree ---
     DATA(lv_path) = client->_bind( val = mt_tree path = `X` ).
     DATA lv_bind TYPE string.
     CONCATENATE `{path:'` lv_path `', parameters:{arrayNames:['NODES']}}` INTO lv_bind.
 
-    DATA(lo_sc) = lo_l->open( `ScrollContainer`
-        )->a( n = `height` v = `calc(100vh - 110px)`
+    DATA(scroll) = col->open( `ScrollContainer`
+        )->a( n = `height`   v = `calc(100vh - 140px)`
         )->a( n = `vertical` v = `true` ).
-    lo_sc->open( `Tree`
-        )->a( n = `id` v = `se80Tree`
-        )->a( n = `items` v = lv_bind
+    scroll->open( `Tree`
+        )->a( n = `id`             v = `se80Tree`
+        )->a( n = `items`          v = lv_bind
+        )->a( n = `noDataText`     v = `No objects found`
         )->open( `StandardTreeItem`
             )->a( n = `title` v = `{TEXT}`
-            )->a( n = `icon` v = `{ICON}`
-            )->a( n = `type` v = `Active`
-            )->a( n = `press` v = client->_event( val = `TREE_CLICK` t_arg = VALUE #( ( `${KEY}` ) ( `${OTYPE}` ) ) )
-        )->shut(
-    )->shut( ).
-    lo_sc->shut( ).
-    lo_l->shut( ).
-    ENDIF. " fullscreen check
+            )->a( n = `icon`  v = `{ICON}`
+            )->a( n = `type`  v = `Active`
+            )->a( n = `press` v = client->_event( val   = `TREE_CLICK`
+                                                  t_arg = VALUE #( ( `${KEY}` ) ( `${OTYPE}` ) ) ) ).
 
-    " ===== RIGHT =====
-    DATA(lv_right_width) = COND #( WHEN mv_fullscreen = abap_true THEN `100%` ELSE `100%` ).
-    DATA(lo_r) = flex->open( `VBox` )->a( n = `height` v = `100%` )->a( n = `width` v = lv_right_width ).
-    DATA(lv_has) = COND #( WHEN mv_cur_obj_name IS NOT INITIAL THEN `true` ELSE `false` ).
-    DATA(lv_edit) = COND #( WHEN mv_edit_mode = abap_true THEN `true` ELSE `false` ).
+  ENDMETHOD.
 
-    lo_r->open( `Toolbar`
-        )->leaf( `Title` )->a( n = `text` v = COND #( WHEN mv_object_title IS NOT INITIAL THEN mv_object_title ELSE `Object Navigator` )
+
+  METHOD build_editor.
+
+    DATA(col) = io_parent->open( `VBox`
+        )->a( n = `height` v = `100%`
+        )->a( n = `width`  v = `100%` ).
+
+    DATA(lv_has)  = z2ui5_cl_ai_xml=>as_bool( xsdbool( mv_cur_obj_name IS NOT INITIAL ) ).
+    DATA(lv_edit) = z2ui5_cl_ai_xml=>as_bool( mv_edit_mode ).
+
+    " ===== Application function bar =====
+    DATA(tb) = col->open( `Toolbar` ).
+    tb->leaf( `Title`
+        )->a( n = `text` v = COND #( WHEN mv_object_title IS NOT INITIAL
+                                     THEN mv_object_title ELSE `Object Navigator` )
         )->leaf( `ObjectStatus`
-            )->a( n = `text` v = mv_status
-            )->a( n = `state` v = COND #( WHEN mv_status = `Active` THEN `Success` WHEN mv_status = `Inactive` THEN `Warning` ELSE `None` )
+            )->a( n = `text`  v = mv_status
+            )->a( n = `state` v = COND #( WHEN mv_status = `Active`   THEN `Success`
+                                          WHEN mv_status = `Inactive` THEN `Warning`
+                                          ELSE `None` )
         )->leaf( `ToolbarSpacer`
-        )->leaf( `Button` )->a( n = `text` v = COND #( WHEN mv_edit_mode = abap_true THEN `Display` ELSE `Edit` )
-            )->a( n = `icon` v = COND #( WHEN mv_edit_mode = abap_true THEN `sap-icon://display` ELSE `sap-icon://edit` )
-            )->a( n = `press` v = client->_event( `TOGGLE_EDIT` ) )->a( n = `type` v = COND #( WHEN mv_edit_mode = abap_true THEN `Emphasized` ELSE `Transparent` ) )->a( n = `enabled` v = lv_has
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://save` )->a( n = `press` v = client->_event( `SAVE` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_edit
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://syntax` )->a( n = `press` v = client->_event( `CHECK` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://activate` )->a( n = `press` v = client->_event( `ACTIVATE` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://text-formatting` )->a( n = `press` v = client->_event( `PRETTY_PRINT` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://compare` )->a( n = `press` v = client->_event( `COMPARE` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `text`    v = COND #( WHEN mv_edit_mode = abap_true THEN `Display` ELSE `Change` )
+            )->a( n = `icon`    v = COND #( WHEN mv_edit_mode = abap_true THEN `sap-icon://display` ELSE `sap-icon://edit` )
+            )->a( n = `tooltip` v = `Display <-> Change`
+            )->a( n = `press`   v = client->_event( `TOGGLE_EDIT` )
+            )->a( n = `type`    v = COND #( WHEN mv_edit_mode = abap_true THEN `Emphasized` ELSE `Transparent` )
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://save`
+            )->a( n = `tooltip` v = `Save`
+            )->a( n = `press`   v = client->_event( `SAVE` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_edit
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://syntax`
+            )->a( n = `tooltip` v = `Check`
+            )->a( n = `press`   v = client->_event( `CHECK` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://activate`
+            )->a( n = `tooltip` v = `Activate`
+            )->a( n = `press`   v = client->_event( `ACTIVATE` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://text-formatting`
+            )->a( n = `tooltip` v = `Pretty Printer`
+            )->a( n = `press`   v = client->_event( `PRETTY_PRINT` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://compare`
+            )->a( n = `tooltip` v = `Compare Versions`
+            )->a( n = `press`   v = client->_event( `COMPARE` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
         )->leaf( `ToolbarSeparator`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://nav-back` )->a( n = `press` v = client->_event( `NAV_BACK` ) )->a( n = `type` v = `Transparent`
-            )->a( n = `enabled` v = COND #( WHEN mv_hist_pos > 1 THEN `true` ELSE `false` )
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://nav-forward` )->a( n = `press` v = client->_event( `NAV_FORWARD` ) )->a( n = `type` v = `Transparent`
-            )->a( n = `enabled` v = COND #( WHEN mv_hist_pos < lines( mt_history ) THEN `true` ELSE `false` )
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://nav-back`
+            )->a( n = `tooltip` v = `Back`
+            )->a( n = `press`   v = client->_event( `NAV_BACK` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = z2ui5_cl_ai_xml=>as_bool( xsdbool( mv_hist_pos > 1 ) )
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://nav-forward`
+            )->a( n = `tooltip` v = `Forward`
+            )->a( n = `press`   v = client->_event( `NAV_FORWARD` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = z2ui5_cl_ai_xml=>as_bool( xsdbool( mv_hist_pos < lines( mt_history ) ) )
         )->leaf( `ToolbarSeparator`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://search` )->a( n = `press` v = client->_event( `WHERE_USED` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://chain-link` )->a( n = `press` v = client->_event( `SHOW_DEPS` ) )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has )->a( n = `tooltip` v = `Dependencies`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://refresh` )->a( n = `press` v = client->_event( `REFRESH` ) )->a( n = `type` v = `Transparent`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://search`
+            )->a( n = `tooltip` v = `Where-Used List`
+            )->a( n = `press`   v = client->_event( `WHERE_USED` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://chain-link`
+            )->a( n = `tooltip` v = `Used Objects`
+            )->a( n = `press`   v = client->_event( `SHOW_DEPS` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://refresh`
+            )->a( n = `tooltip` v = `Refresh`
+            )->a( n = `press`   v = client->_event( `REFRESH` )
+            )->a( n = `type`    v = `Transparent`
         )->leaf( `ToolbarSeparator`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://create` )->a( n = `press` v = client->_event( `CREATE_OBJ` ) )->a( n = `type` v = `Transparent` )->a( n = `tooltip` v = `Create`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://delete`
-            )->a( n = `press` v = COND #( WHEN mv_msg_type = `Warning` AND mv_message CS `Delete`
-                THEN client->_event( `CONFIRM_DELETE` ) ELSE client->_event( `DELETE_OBJ` ) )
-            )->a( n = `type` v = `Transparent` )->a( n = `enabled` v = lv_has
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://create`
+            )->a( n = `tooltip` v = `Create`
+            )->a( n = `press`   v = client->_event( `CREATE_OBJ` )
+            )->a( n = `type`    v = `Transparent`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://delete`
+            )->a( n = `tooltip` v = `Delete`
+            )->a( n = `press`   v = COND #( WHEN mv_msg_type = `Warning` AND mv_message CS `Delete`
+                                            THEN client->_event( `CONFIRM_DELETE` )
+                                            ELSE client->_event( `DELETE_OBJ` ) )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_has
         )->leaf( `ToolbarSeparator`
-        )->leaf( `Button` )->a( n = `icon` v = `sap-icon://copy` )->a( n = `press` v = client->_event_client(
-            val = client->cs_event-clipboard_copy t_arg = VALUE #( ( client->_bind( val = mv_source path = `X` ) ) ) )
-            )->a( n = `type` v = `Transparent` )->a( n = `tooltip` v = `Copy source to clipboard`
-        )->leaf( `Button` )->a( n = `icon` v = COND #( WHEN mv_fullscreen = abap_true THEN `sap-icon://exit-full-screen` ELSE `sap-icon://full-screen` )
-            )->a( n = `press` v = client->_event( `FULLSCREEN` ) )->a( n = `type` v = `Transparent` )->a( n = `tooltip` v = `Toggle Fullscreen`
-    )->shut( ).
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://copy`
+            )->a( n = `tooltip` v = `Copy Source Code to Clipboard`
+            )->a( n = `press`   v = client->_event_client(
+                val   = client->cs_event-clipboard_copy
+                t_arg = VALUE #( ( client->_bind( val = mv_source path = `X` ) ) ) )
+            )->a( n = `type`    v = `Transparent`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = COND #( WHEN mv_fullscreen = abap_true
+                                            THEN `sap-icon://exit-full-screen` ELSE `sap-icon://full-screen` )
+            )->a( n = `tooltip` v = `Full Screen On/Off`
+            )->a( n = `press`   v = client->_event( `FULLSCREEN` )
+            )->a( n = `type`    v = `Transparent` ).
 
-    " Quick nav + Breadcrumb + Lock info bar
-    lo_r->open( `Toolbar` )->a( n = `height` v = `2rem` ).
-    lo_r->leaf( `Input`
-        )->a( n = `value` v = client->_bind( mv_quick_nav )
-        )->a( n = `width` v = `160px`
-        )->a( n = `placeholder` v = `Jump to object...`
-        )->a( n = `submit` v = client->_event( `QUICK_NAV` ) ).
+    " ===== Object entry / package path / lock information =====
+    DATA(bar2) = col->open( `Toolbar` )->a( n = `height` v = `2rem` ).
+    bar2->leaf( `Input`
+        )->a( n = `value`       v = client->_bind( mv_quick_nav )
+        )->a( n = `width`       v = `160px`
+        )->a( n = `placeholder` v = `Other object`
+        )->a( n = `submit`      v = client->_event( `QUICK_NAV` ) ).
     IF mv_breadcrumb IS NOT INITIAL.
-      lo_r->leaf( `Text` )->a( n = `text` v = mv_breadcrumb ).
+      bar2->leaf( `Text` )->a( n = `text` v = mv_breadcrumb ).
     ENDIF.
     IF mv_lock_info IS NOT INITIAL.
-      lo_r->leaf( `ObjectStatus`
-          )->a( n = `text` v = mv_lock_info
+      bar2->leaf( `ObjectStatus`
+          )->a( n = `text`  v = mv_lock_info
           )->a( n = `state` v = `Warning` ).
     ENDIF.
-    lo_r->leaf( `ToolbarSpacer` ).
-    lo_r->leaf( `Button`
-        )->a( n = `icon` v = COND #( WHEN mv_dark_theme = abap_true THEN `sap-icon://lightbulb` ELSE `sap-icon://darkmode` )
-        )->a( n = `press` v = client->_event( `TOGGLE_THEME` )
-        )->a( n = `type` v = `Transparent`
-        )->a( n = `tooltip` v = `Toggle Dark/Light Theme` ).
-    lo_r->shut( ).
+    bar2->leaf( `ToolbarSpacer`
+        )->leaf( `Button`
+            )->a( n = `icon`    v = COND #( WHEN mv_dark_theme = abap_true
+                                            THEN `sap-icon://lightbulb` ELSE `sap-icon://darkmode` )
+            )->a( n = `tooltip` v = `Switch Editor Colors`
+            )->a( n = `press`   v = client->_event( `TOGGLE_THEME` )
+            )->a( n = `type`    v = `Transparent` ).
 
-    " Find & Replace + Goto Line bar
-    lo_r->open( `Toolbar` )->a( n = `height` v = `2rem` ).
-    lo_r->leaf( `Label` )->a( n = `text` v = `Find:` ).
-    lo_r->leaf( `Input`
-        )->a( n = `value` v = client->_bind( mv_find )
-        )->a( n = `width` v = `130px`
-        )->a( n = `placeholder` v = `Search...`
-        )->a( n = `submit` v = client->_event( `FIND_IN_SOURCE` ) ).
-    lo_r->leaf( `Button`
-        )->a( n = `icon` v = `sap-icon://search`
-        )->a( n = `press` v = client->_event( `FIND_IN_SOURCE` )
-        )->a( n = `type` v = `Transparent` ).
-    lo_r->leaf( `Label` )->a( n = `text` v = `Repl:` ).
-    lo_r->leaf( `Input`
-        )->a( n = `value` v = client->_bind( mv_replace )
-        )->a( n = `width` v = `130px`
-        )->a( n = `placeholder` v = `Replace...`
-        )->a( n = `submit` v = client->_event( `REPLACE_ALL` ) ).
-    lo_r->leaf( `Button`
-        )->a( n = `text` v = `All`
-        )->a( n = `press` v = client->_event( `REPLACE_ALL` )
-        )->a( n = `type` v = `Transparent`
-        )->a( n = `enabled` v = lv_edit ).
-    lo_r->leaf( `ToolbarSeparator` ).
-    lo_r->leaf( `Label` )->a( n = `text` v = `Line:` ).
-    lo_r->leaf( `Input`
-        )->a( n = `value` v = client->_bind( mv_goto_line )
-        )->a( n = `width` v = `60px`
-        )->a( n = `type` v = `Number`
-        )->a( n = `submit` v = client->_event( `GOTO_LINE` ) ).
-    lo_r->shut( ).
+    " ===== Find / Replace / Goto line =====
+    DATA(bar3) = col->open( `Toolbar` )->a( n = `height` v = `2rem` ).
+    bar3->leaf( `Label`
+        )->a( n = `text` v = `Find`
+        )->leaf( `Input`
+            )->a( n = `value`       v = client->_bind( mv_find )
+            )->a( n = `width`       v = `130px`
+            )->a( n = `placeholder` v = `Search term`
+            )->a( n = `submit`      v = client->_event( `FIND_IN_SOURCE` )
+        )->leaf( `Button`
+            )->a( n = `icon`    v = `sap-icon://search`
+            )->a( n = `tooltip` v = `Find`
+            )->a( n = `press`   v = client->_event( `FIND_IN_SOURCE` )
+            )->a( n = `type`    v = `Transparent`
+        )->leaf( `Label`
+            )->a( n = `text` v = `Replace`
+        )->leaf( `Input`
+            )->a( n = `value`       v = client->_bind( mv_replace )
+            )->a( n = `width`       v = `130px`
+            )->a( n = `placeholder` v = `Replace with`
+            )->a( n = `submit`      v = client->_event( `REPLACE_ALL` )
+        )->leaf( `Button`
+            )->a( n = `text`    v = `Replace All`
+            )->a( n = `tooltip` v = `Replace All`
+            )->a( n = `press`   v = client->_event( `REPLACE_ALL` )
+            )->a( n = `type`    v = `Transparent`
+            )->a( n = `enabled` v = lv_edit
+        )->leaf( `ToolbarSeparator`
+        )->leaf( `Label`
+            )->a( n = `text` v = `Line`
+        )->leaf( `Input`
+            )->a( n = `value`  v = client->_bind( mv_goto_line )
+            )->a( n = `width`  v = `60px`
+            )->a( n = `type`   v = `Number`
+            )->a( n = `submit` v = client->_event( `GOTO_LINE` ) ).
 
+    " ===== Status message =====
     IF mv_message IS NOT INITIAL.
-      lo_r->leaf( `MessageStrip` )->a( n = `text` v = mv_message )->a( n = `type` v = mv_msg_type )->a( n = `showCloseButton` v = `true` ).
+      col->leaf( `MessageStrip`
+          )->a( n = `text`            v = mv_message
+          )->a( n = `type`            v = mv_msg_type
+          )->a( n = `showCloseButton` v = `true` ).
     ENDIF.
 
-    " === Tabs ===
-    DATA(lo_tabs) = lo_r->open( `IconTabBar`
-        )->a( n = `selectedKey` v = client->_bind( mv_active_tab )
-        )->a( n = `expandable` v = `false`
+    " ===== Tab strip =====
+    DATA(tabs) = col->open( `IconTabBar`
+        )->a( n = `selectedKey`          v = client->_bind( mv_active_tab )
+        )->a( n = `expandable`           v = `false`
         )->a( n = `stretchContentHeight` v = `true`
         )->open( `items` ).
 
-    " Tab: Source Code (like SE80: "Class Source" / "Source Code")
-    DATA(lo_t1) = lo_tabs->open( `IconTabFilter`
+    " --- Source Code ---
+    DATA(t1) = tabs->open( `IconTabFilter`
         )->a( n = `text` v = `Source Code`
-        )->a( n = `key` v = `SRC`
+        )->a( n = `key`  v = `SRC`
         )->a( n = `icon` v = `sap-icon://syntax` ).
-    DATA(lo_c1) = lo_t1->open( `content` ).
+    DATA(c1) = t1->open( `content` ).
     IF mv_edit_mode = abap_true.
-      lo_c1->leaf( `TextArea` )->a( n = `value` v = client->_bind( mv_source ) )->a( n = `height` v = `calc(100vh - 150px)` )->a( n = `width` v = `100%` )->a( n = `growing` v = `false` ).
+      c1->leaf( `TextArea`
+          )->a( n = `value`   v = client->_bind( mv_source )
+          )->a( n = `height`  v = `calc(100vh - 190px)`
+          )->a( n = `width`   v = `100%`
+          )->a( n = `growing` v = `false` ).
     ELSE.
-      lo_c1->leaf( n = `CodeEditor` ns = `ce`
-          )->a( n = `value` v = client->_bind( mv_source )
-          )->a( n = `type` v = mv_syntax_mode
-          )->a( n = `height` v = `calc(100vh - 150px)`
-          )->a( n = `width` v = `100%`
-          )->a( n = `editable` v = `false`
+      c1->leaf( n = `CodeEditor` ns = `ce`
+          )->a( n = `value`      v = client->_bind( mv_source )
+          )->a( n = `type`       v = mv_syntax_mode
+          )->a( n = `height`     v = `calc(100vh - 190px)`
+          )->a( n = `width`      v = `100%`
+          )->a( n = `editable`   v = `false`
           )->a( n = `colorTheme` v = COND #( WHEN mv_dark_theme = abap_true THEN `tomorrow_night` ELSE `tomorrow` ) ).
     ENDIF.
-    lo_c1->shut( ). lo_t1->shut( ).
 
-    " Tab: Local Definitions/Implementations
-    DATA(lo_t2) = lo_tabs->open( `IconTabFilter`
-        )->a( n = `text` v = `Local Definitions` )->a( n = `key` v = `LOC`
+    " --- Local Definitions/Implementations ---
+    DATA(t2) = tabs->open( `IconTabFilter`
+        )->a( n = `text` v = `Local Definitions/Implementations`
+        )->a( n = `key`  v = `LOC`
         )->a( n = `icon` v = `sap-icon://detail-view` ).
-    DATA(lo_c2) = lo_t2->open( `content` ).
+    DATA(c2) = t2->open( `content` ).
     IF mv_edit_mode = abap_true.
-      lo_c2->leaf( `TextArea`
-          )->a( n = `value` v = client->_bind( mv_source_local )
-          )->a( n = `height` v = `calc(100vh - 150px)`
-          )->a( n = `width` v = `100%`
+      c2->leaf( `TextArea`
+          )->a( n = `value`   v = client->_bind( mv_source_local )
+          )->a( n = `height`  v = `calc(100vh - 190px)`
+          )->a( n = `width`   v = `100%`
           )->a( n = `growing` v = `false` ).
     ELSE.
-      lo_c2->leaf( n = `CodeEditor` ns = `ce`
-          )->a( n = `value` v = client->_bind( mv_source_local )
-          )->a( n = `type` v = `abap`
-          )->a( n = `height` v = `calc(100vh - 150px)`
-          )->a( n = `width` v = `100%`
-          )->a( n = `editable` v = `false`
+      c2->leaf( n = `CodeEditor` ns = `ce`
+          )->a( n = `value`      v = client->_bind( mv_source_local )
+          )->a( n = `type`       v = `abap`
+          )->a( n = `height`     v = `calc(100vh - 190px)`
+          )->a( n = `width`      v = `100%`
+          )->a( n = `editable`   v = `false`
           )->a( n = `colorTheme` v = COND #( WHEN mv_dark_theme = abap_true THEN `tomorrow_night` ELSE `tomorrow` ) ).
     ENDIF.
-    lo_c2->shut( ). lo_t2->shut( ).
 
-    " Tab: Test Classes
-    DATA(lo_t3) = lo_tabs->open( `IconTabFilter`
-        )->a( n = `text` v = `Test Classes` )->a( n = `key` v = `TST`
+    " --- Local Test Classes ---
+    DATA(t3) = tabs->open( `IconTabFilter`
+        )->a( n = `text` v = `Local Test Classes`
+        )->a( n = `key`  v = `TST`
         )->a( n = `icon` v = `sap-icon://lab` ).
-    DATA(lo_c3) = lo_t3->open( `content` ).
+    DATA(c3) = t3->open( `content` ).
     IF mv_edit_mode = abap_true.
-      lo_c3->leaf( `TextArea`
-          )->a( n = `value` v = client->_bind( mv_source_test )
-          )->a( n = `height` v = `calc(100vh - 150px)`
-          )->a( n = `width` v = `100%`
+      c3->leaf( `TextArea`
+          )->a( n = `value`   v = client->_bind( mv_source_test )
+          )->a( n = `height`  v = `calc(100vh - 190px)`
+          )->a( n = `width`   v = `100%`
           )->a( n = `growing` v = `false` ).
     ELSE.
-      lo_c3->leaf( n = `CodeEditor` ns = `ce`
-          )->a( n = `value` v = client->_bind( mv_source_test )
-          )->a( n = `type` v = `abap`
-          )->a( n = `height` v = `calc(100vh - 150px)`
-          )->a( n = `width` v = `100%`
-          )->a( n = `editable` v = `false`
+      c3->leaf( n = `CodeEditor` ns = `ce`
+          )->a( n = `value`      v = client->_bind( mv_source_test )
+          )->a( n = `type`       v = `abap`
+          )->a( n = `height`     v = `calc(100vh - 190px)`
+          )->a( n = `width`      v = `100%`
+          )->a( n = `editable`   v = `false`
           )->a( n = `colorTheme` v = COND #( WHEN mv_dark_theme = abap_true THEN `tomorrow_night` ELSE `tomorrow` ) ).
     ENDIF.
-    lo_c3->shut( ). lo_t3->shut( ).
 
-    " Tab: Text Elements (like SE80)
-    DATA(lo_t5) = lo_tabs->open( `IconTabFilter`
+    " --- Text Elements ---
+    tabs->open( `IconTabFilter`
         )->a( n = `text` v = `Text Elements`
-        )->a( n = `key` v = `TXT`
-        )->a( n = `icon` v = `sap-icon://text` ).
-    lo_t5->open( `content`
-        )->leaf( n = `CodeEditor` ns = `ce`
-            )->a( n = `value` v = client->_bind( mv_text_elem )
-            )->a( n = `type` v = `text`
-            )->a( n = `height` v = `calc(100vh - 150px)`
-            )->a( n = `width` v = `100%`
-            )->a( n = `editable` v = `false`
-    )->shut( ).
-    lo_t5->shut( ).
+        )->a( n = `key`  v = `TXT`
+        )->a( n = `icon` v = `sap-icon://text`
+        )->open( `content`
+            )->leaf( n = `CodeEditor` ns = `ce`
+                )->a( n = `value`    v = client->_bind( mv_text_elem )
+                )->a( n = `type`     v = `text`
+                )->a( n = `height`   v = `calc(100vh - 190px)`
+                )->a( n = `width`    v = `100%`
+                )->a( n = `editable` v = `false` ).
 
-    " Tab: Documentation (like SE80 "Class documentation")
-    DATA(lo_t6) = lo_tabs->open( `IconTabFilter`
+    " --- Documentation ---
+    tabs->open( `IconTabFilter`
         )->a( n = `text` v = `Documentation`
-        )->a( n = `key` v = `DOC`
-        )->a( n = `icon` v = `sap-icon://document` ).
-    lo_t6->open( `content`
-        )->leaf( n = `CodeEditor` ns = `ce`
-            )->a( n = `value` v = client->_bind( mv_docu )
-            )->a( n = `type` v = `text`
-            )->a( n = `height` v = `calc(100vh - 150px)`
-            )->a( n = `width` v = `100%`
-            )->a( n = `editable` v = `false`
-    )->shut( ).
-    lo_t6->shut( ).
+        )->a( n = `key`  v = `DOC`
+        )->a( n = `icon` v = `sap-icon://document`
+        )->open( `content`
+            )->leaf( n = `CodeEditor` ns = `ce`
+                )->a( n = `value`    v = client->_bind( mv_docu )
+                )->a( n = `type`     v = `text`
+                )->a( n = `height`   v = `calc(100vh - 190px)`
+                )->a( n = `width`    v = `100%`
+                )->a( n = `editable` v = `false` ).
 
-    " Tab: Properties (like SE80 "Properties" / "Attributes")
-    DATA(lo_t4) = lo_tabs->open( `IconTabFilter`
+    " --- Properties ---
+    DATA(t4) = tabs->open( `IconTabFilter`
         )->a( n = `text` v = `Properties`
-        )->a( n = `key` v = `INFO`
+        )->a( n = `key`  v = `INFO`
         )->a( n = `icon` v = `sap-icon://hint` ).
-    DATA(lo_info) = lo_t4->open( `content` ).
+    DATA(info) = t4->open( `content` ).
 
     IF mt_props IS NOT INITIAL.
-      DATA(lo_pl) = lo_info->open( `List` )->a( n = `headerText` v = `Properties` )->a( n = `items` v = client->_bind( mt_props ) ).
-      lo_pl->open( `items` )->open( `DisplayListItem` )->a( n = `label` v = `{LABEL}` )->a( n = `value` v = `{VALUE}` )->shut( )->shut( ).
-      lo_pl->shut( ).
+      DATA(prop_list) = info->open( `List`
+          )->a( n = `headerText` v = `Properties`
+          )->a( n = `items`      v = client->_bind( mt_props ) ).
+      prop_list->open( `items`
+          )->open( `DisplayListItem`
+              )->a( n = `label` v = `{LABEL}`
+              )->a( n = `value` v = `{VALUE}` ).
     ENDIF.
 
     IF mt_methods IS NOT INITIAL.
-      DATA(lo_mt) = lo_info->open( `Table` )->a( n = `headerText` v = |Methods ({ lines( mt_methods ) })| )->a( n = `items` v = client->_bind( mt_methods ) ).
-      DATA(lo_mc) = lo_mt->open( `columns` ).
-      lo_mc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Name` )->shut( ).
-      lo_mc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Vis` )->shut( ).
-      lo_mc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Type` )->shut( ).
-      lo_mc->shut( ).
-      lo_mt->open( `items` )->open( `ColumnListItem` )->open( `cells`
-          )->leaf( `Text` )->a( n = `text` v = `{CMPNAME}`
-          )->leaf( `Text` )->a( n = `text` v = `{EXPOSURE}`
-          )->leaf( `Text` )->a( n = `text` v = `{MTDTYPE}`
-      )->shut( )->shut( )->shut( ).
-      lo_mt->shut( ).
+      DATA(meth_tab) = info->open( `Table`
+          )->a( n = `headerText` v = |Methods ({ lines( mt_methods ) })|
+          )->a( n = `items`      v = client->_bind( mt_methods ) ).
+      DATA(meth_cols) = meth_tab->open( `columns` ).
+      meth_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Method` ).
+      meth_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Visibility` ).
+      meth_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Type` ).
+      meth_tab->open( `items`
+          )->open( `ColumnListItem`
+              )->open( `cells`
+                  )->leaf( `Text` )->a( n = `text` v = `{CMPNAME}`
+                  )->leaf( `Text` )->a( n = `text` v = `{EXPOSURE}`
+                  )->leaf( `Text` )->a( n = `text` v = `{MTDTYPE}` ).
     ENDIF.
 
     IF mt_fields IS NOT INITIAL.
-      DATA(lo_ft) = lo_info->open( `Table` )->a( n = `headerText` v = |Fields ({ lines( mt_fields ) })| )->a( n = `items` v = client->_bind( mt_fields ) ).
-      DATA(lo_fc) = lo_ft->open( `columns` ).
-      lo_fc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Name` )->shut( ).
-      lo_fc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Key` )->shut( ).
-      lo_fc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Type` )->shut( ).
-      lo_fc->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Detail` )->shut( ).
-      lo_fc->shut( ).
-      lo_ft->open( `items` )->open( `ColumnListItem` )->open( `cells`
-          )->leaf( `Text` )->a( n = `text` v = `{NAME}`
-          )->leaf( `Text` )->a( n = `text` v = `{KEYFLAG}`
-          )->leaf( `Text` )->a( n = `text` v = `{TYPTYPE}`
-          )->leaf( `Text` )->a( n = `text` v = `{TYPE}`
-      )->shut( )->shut( )->shut( ).
-      lo_ft->shut( ).
+      DATA(fld_tab) = info->open( `Table`
+          )->a( n = `headerText` v = |Attributes ({ lines( mt_fields ) })|
+          )->a( n = `items`      v = client->_bind( mt_fields ) ).
+      DATA(fld_cols) = fld_tab->open( `columns` ).
+      fld_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Name` ).
+      fld_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Key` ).
+      fld_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Category` ).
+      fld_cols->open( `Column` )->leaf( `Text` )->a( n = `text` v = `Type` ).
+      fld_tab->open( `items`
+          )->open( `ColumnListItem`
+              )->open( `cells`
+                  )->leaf( `Text` )->a( n = `text` v = `{NAME}`
+                  )->leaf( `Text` )->a( n = `text` v = `{KEYFLAG}`
+                  )->leaf( `Text` )->a( n = `text` v = `{TYPTYPE}`
+                  )->leaf( `Text` )->a( n = `text` v = `{TYPE}` ).
     ENDIF.
 
-    lo_info->shut( ). lo_t4->shut( ).
-    lo_tabs->shut( )->shut( ).
-
-    " === BOTTOM LOG PANEL ===
+    " ===== Message list =====
     IF mt_log IS NOT INITIAL.
-      DATA(lo_log) = lo_r->open( `Panel`
+      DATA(log_panel) = col->open( `Panel`
           )->a( n = `headerText` v = |Messages ({ lines( mt_log ) })|
           )->a( n = `expandable` v = `true`
           )->a( n = `expanded`   v = `true`
           )->a( n = `height`     v = `150px` ).
-      DATA(lo_lt) = lo_log->open( `List`
+      DATA(log_list) = log_panel->open( `List`
           )->a( n = `items` v = client->_bind( mt_log ) ).
-      lo_lt->open( `items`
+      log_list->open( `items`
           )->open( `StandardListItem`
-              )->a( n = `title` v = `{MESSAGE}`
-              )->a( n = `info`  v = `{LINE}`
-              )->a( n = `icon`  v = `{ICON}`
-              )->a( n = `infoState` v = `{TYPE}`
-          )->shut( )->shut( ).
-      lo_lt->shut( ).
-      lo_log->shut( ).
+              )->a( n = `title`     v = `{MESSAGE}`
+              )->a( n = `info`      v = `{LINE}`
+              )->a( n = `icon`      v = `{ICON}`
+              )->a( n = `infoState` v = `{TYPE}` ).
     ENDIF.
 
-    lo_r->shut( )->shut( )->shut( )->shut( )->shut( ).
+  ENDMETHOD.
 
-    " === WHERE-USED DIALOG ===
-    IF mv_show_whereu = abap_true.
-      DATA(lo_d) = view->open( `Dialog` )->a( n = `title` v = |Where-Used: { mv_cur_obj_name }| )->a( n = `contentWidth` v = `500px` )->a( n = `contentHeight` v = `400px` ).
-      IF mt_usages IS NOT INITIAL.
-        lo_d->open( `List` )->a( n = `items` v = client->_bind( mt_usages )
-            )->open( `items` )->open( `StandardListItem`
-                )->a( n = `title` v = `{OBJ_NAME}` )->a( n = `description` v = `{OBJECT}` )->a( n = `type` v = `Active`
-                )->a( n = `press` v = client->_event( val = `USAGE_CLICK` t_arg = VALUE #( ( `${OBJ_NAME}` ) ( `${OBJECT}` ) ) )
-            )->shut( )->shut( )->shut( ).
-      ELSE.
-        lo_d->leaf( `MessageStrip` )->a( n = `text` v = `No usages found.` )->a( n = `type` v = `Information` ).
-      ENDIF.
-      lo_d->open( `beginButton` )->leaf( `Button` )->a( n = `text` v = `Close` )->a( n = `press` v = client->_event( `CLOSE_WHEREU` ) )->shut( ).
-      lo_d->shut( ).
-      client->popup_display( view->stringify( ) ).
+
+  METHOD build_popup.
+
+    " popup_display( ) expects a fragment definition as root element, exactly
+    " like z2ui5_cl_xml_view=>factory_popup( ) produces it.
+    DATA(popup) = z2ui5_cl_ai_xml=>factory( ).
+
+    DATA(dialog) = popup->open( n = `FragmentDefinition` ns = `core`
+        )->a( n = `xmlns`      v = `sap.m`
+        )->a( n = `xmlns:core` v = `sap.ui.core`
+        )->open( `Dialog`
+            )->a( n = `title`         v = mv_popup_title
+            )->a( n = `contentWidth`  v = `600px`
+            )->a( n = `contentHeight` v = `400px` ).
+
+    IF mt_usages IS NOT INITIAL.
+      DATA(list) = dialog->open( `List`
+          )->a( n = `items` v = client->_bind( mt_usages ) ).
+      list->open( `items`
+          )->open( `StandardListItem`
+              )->a( n = `title`       v = `{OBJ_NAME}`
+              )->a( n = `description` v = `{OBJECT}`
+              )->a( n = `type`        v = `Active`
+              )->a( n = `press`       v = client->_event( val   = `USAGE_CLICK`
+                                                          t_arg = VALUE #( ( `${OBJ_NAME}` ) ( `${OBJECT}` ) ) ) ).
     ELSE.
-      client->view_display( view->stringify( ) ).
+      dialog->leaf( `MessageStrip`
+          )->a( n = `text` v = `No usage found.`
+          )->a( n = `type` v = `Information` ).
     ENDIF.
+
+    dialog->open( `endButton`
+        )->leaf( `Button`
+            )->a( n = `text`  v = `Continue`
+            )->a( n = `press` v = client->_event( `CLOSE_WHEREU` ) ).
+
+    result = popup->stringify( ).
+
   ENDMETHOD.
 
 ENDCLASS.

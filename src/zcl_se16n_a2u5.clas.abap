@@ -7,7 +7,7 @@ CLASS zcl_se16n_a2u5 DEFINITION PUBLIC.
     CONSTANTS c_default_max TYPE i VALUE 200.
     CONSTANTS c_max_cap     TYPE i VALUE 10000.
 
-    " Step state: 1=name input, 2=selection screen, 3=result
+    " Step state: 1=table name, 2=selection screen, 3=result list
     DATA mv_step       TYPE i VALUE 1.
 
     " --- Step 1 ---
@@ -22,6 +22,11 @@ CLASS zcl_se16n_a2u5 DEFINITION PUBLIC.
              col_id  TYPE string,
              visible TYPE abap_bool,
              sort    TYPE string,
+             " The selection values are entered in the line of the field
+             " itself, exactly like the selection criteria of SE16N.
+             opt     TYPE string,
+             low     TYPE string,
+             high    TYPE string,
            END OF ty_s_field,
            ty_t_field TYPE STANDARD TABLE OF ty_s_field WITH EMPTY KEY.
     DATA mt_fields TYPE ty_t_field.
@@ -37,16 +42,6 @@ CLASS zcl_se16n_a2u5 DEFINITION PUBLIC.
            END OF ty_s_crit,
            ty_t_crit TYPE STANDARD TABLE OF ty_s_crit WITH EMPTY KEY.
     DATA mt_crit TYPE ty_t_crit.
-
-    " --- Dropdown key/text ---
-    TYPES: BEGIN OF ty_s_kt,
-             key  TYPE string,
-             text TYPE string,
-           END OF ty_s_kt,
-           ty_t_kt TYPE STANDARD TABLE OF ty_s_kt WITH EMPTY KEY.
-    DATA mt_signs     TYPE ty_t_kt.
-    DATA mt_opts      TYPE ty_t_kt.
-    DATA mt_sort_opts TYPE ty_t_kt.
 
     " --- Step 3: Result (fixed-width 50 string columns) ---
     TYPES: BEGIN OF ty_s_row,
@@ -77,17 +72,26 @@ CLASS zcl_se16n_a2u5 DEFINITION PUBLIC.
            ty_t_suggest TYPE STANDARD TABLE OF ty_s_suggest WITH EMPTY KEY.
     DATA mt_suggestions TYPE ty_t_suggest.
 
-    " --- Search in results ---
-    DATA mv_search   TYPE string.
+    " --- Find in result list ---
+    DATA mv_search     TYPE string.
     DATA mv_show_shell TYPE abap_bool VALUE abap_true.
 
-    " --- Variants ---
+    " --- Variants (persisted in ZSE16N_A2U5_VAR) ---
     TYPES: BEGIN OF ty_s_variant_list,
              id   TYPE string,
              name TYPE string,
            END OF ty_s_variant_list,
            ty_t_variant_list TYPE STANDARD TABLE OF ty_s_variant_list WITH EMPTY KEY.
+    " payload that is stored as JSON in ZSE16N_A2U5_VAR-JSON_DATA
+    TYPES: BEGIN OF ty_s_variant_data,
+             table_name TYPE string,
+             max_hits   TYPE string,
+             fields     TYPE ty_t_field,
+             criteria   TYPE ty_t_crit,
+           END OF ty_s_variant_data.
     DATA mv_variant_name TYPE string.
+    "! selectedKey of the "Get Variant" dropdown
+    DATA mv_variant_sel  TYPE string.
     DATA mt_variant_list TYPE ty_t_variant_list.
 
   PROTECTED SECTION.
@@ -96,12 +100,27 @@ CLASS zcl_se16n_a2u5 DEFINITION PUBLIC.
     METHODS view_step_1.
     METHODS view_step_2.
     METHODS view_step_3.
+    "! Selection screen of SE16N. The screen looks the same before and after
+    "! the table metadata have been read - only the field list is filled.
+    METHODS view_selection
+      IMPORTING iv_loaded TYPE abap_bool.
+    "! Derives the selection criteria from the values entered in the field
+    "! lines of the selection screen. Called before every database read.
+    METHODS crit_from_fields.
     METHODS on_event.
     METHODS load_metadata.
     METHODS execute_query.
-    METHODS init_dropdowns.
     METHODS search_tables
       IMPORTING iv_term TYPE string.
+    "! one SQL condition for a single selection line (sign not evaluated here)
+    METHODS build_condition
+      IMPORTING is_crit       TYPE ty_s_crit
+      RETURNING VALUE(result) TYPE string.
+    "! complete WHERE clause - include lines of one field are OR-combined,
+    "! exclude lines are negated, different fields are AND-combined
+    METHODS build_where
+      RETURNING VALUE(result) TYPE string.
+    METHODS count_entries.
     METHODS variant_save.
     METHODS variant_load
       IMPORTING iv_id TYPE string.
@@ -119,7 +138,6 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
     me->client = client.
     IF client->check_on_init( ).
-      init_dropdowns( ).
       view_step_1( ).
     ELSEIF client->check_on_event( ).
       on_event( ).
@@ -143,7 +161,7 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
       WHEN `ADD_CRIT`.
         TRY.
-            DATA(lv_uuid) = cl_system_uuid=>create_uuid_c32_static( ).
+            DATA(lv_uuid) = CONV string( cl_system_uuid=>create_uuid_c32_static( ) ).
           CATCH cx_uuid_error.
             lv_uuid = |{ sy-uzeit }{ lines( mt_crit ) }|.
         ENDTRY.
@@ -163,32 +181,13 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
         IF mv_step = 3.
           view_step_3( ).
         ELSE.
-          client->view_model_update( ).
+          " re-render step 2 - the MessageStrip carries a static text and would
+          " never appear with a plain view_model_update( )
+          view_step_2( ).
         ENDIF.
 
       WHEN `COUNT`.
-        DATA lv_where TYPE string.
-        DATA lv_count TYPE i.
-        lv_where = ``.
-        LOOP AT mt_crit ASSIGNING FIELD-SYMBOL(<c>) WHERE fname IS NOT INITIAL AND low IS NOT INITIAL.
-          DATA(lv_val) = <c>-low.
-          REPLACE ALL OCCURRENCES OF `'` IN lv_val WITH `''`.
-          IF lv_where IS NOT INITIAL.
-            lv_where = |{ lv_where } AND |.
-          ENDIF.
-          lv_where = |{ lv_where }{ <c>-fname } = '{ lv_val }'|.
-        ENDLOOP.
-        IF lv_where IS INITIAL.
-          lv_where = `1 = 1`.
-        ENDIF.
-        TRY.
-            SELECT COUNT(*) FROM (mv_table_name) WHERE (lv_where) INTO @lv_count.
-            mv_message      = |Number of entries: { lv_count }|.
-            mv_message_type = `Success`.
-          CATCH cx_root INTO DATA(lx_cnt).
-            mv_message      = |COUNT failed: { lx_cnt->get_text( ) }|.
-            mv_message_type = `Error`.
-        ENDTRY.
+        count_entries( ).
         view_step_2( ).
 
       WHEN `SUGGEST`.
@@ -198,8 +197,12 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
       WHEN `SEARCH_RESULT`.
         DATA(lv_search) = to_upper( mv_search ).
-        " Re-run query to get full data, then filter client-side
+        " Re-read the data, then filter in the result list
         execute_query( ).
+        IF mv_step <> 3.
+          view_step_2( ).
+          RETURN.
+        ENDIF.
         IF lv_search IS NOT INITIAL.
           DATA lt_keep TYPE ty_t_row.
           LOOP AT mt_rows ASSIGNING FIELD-SYMBOL(<row>).
@@ -217,43 +220,46 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
               APPEND <row> TO lt_keep.
             ENDIF.
           ENDLOOP.
-          mt_rows = lt_keep.
+          mt_rows       = lt_keep.
           mv_total_rows = lines( mt_rows ).
+          mv_message      = |{ mv_total_rows } entries contain { lv_search }.|.
+          mv_message_type = COND #( WHEN mv_total_rows = 0 THEN `Warning` ELSE `Success` ).
         ENDIF.
-        client->view_model_update( ).
+        view_step_3( ).
 
       WHEN `TOGGLE_SHELL`.
-        IF mv_show_shell = abap_true.
-          mv_show_shell = abap_false.
-        ELSE.
-          mv_show_shell = abap_true.
-        ENDIF.
+        mv_show_shell = xsdbool( mv_show_shell = abap_false ).
         view_step_3( ).
 
       WHEN `SAVE_VARIANT`.
         variant_save( ).
-        client->view_model_update( ).
+        view_step_2( ).
 
       WHEN `LOAD_VARIANT`.
-        DATA(lv_var_id) = client->get_event_arg( ).
-        variant_load( lv_var_id ).
+        variant_load( mv_variant_sel ).
         view_step_2( ).
 
       WHEN `DEL_VARIANT`.
-        DATA(lv_del_id) = client->get_event_arg( ).
-        variant_delete( lv_del_id ).
-        client->view_model_update( ).
+        variant_delete( mv_variant_sel ).
+        view_step_2( ).
 
       WHEN `BACK_TO_INPUT`.
-        CLEAR: mt_fields, mt_crit, mt_rows, mv_message, mv_total_rows.
+        CLEAR: mt_fields, mt_crit, mt_rows, mv_message, mv_total_rows, mv_search.
         mv_message_type = `Information`.
         mv_step         = 1.
         view_step_1( ).
 
       WHEN `BACK_TO_SEL`.
         mv_step = 2.
-        CLEAR: mt_rows, mv_total_rows, mv_message.
+        CLEAR: mt_rows, mv_total_rows, mv_message, mv_search.
         view_step_2( ).
+
+      WHEN OTHERS.
+        CASE mv_step.
+          WHEN 3.     view_step_3( ).
+          WHEN 2.     view_step_2( ).
+          WHEN OTHERS. view_step_1( ).
+        ENDCASE.
 
     ENDCASE.
 
@@ -262,223 +268,285 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
   METHOD view_step_1.
 
-    DATA(view) = z2ui5_cl_xml_view=>factory( ).
-
-    DATA(page) = view->shell( )->page(
-        title = `SE16N - Generic Data Browser` ).
-
-    IF mv_message IS NOT INITIAL.
-      page->message_strip(
-          text     = mv_message
-          type     = mv_message_type
-          showicon = abap_true ).
-    ENDIF.
-
-    DATA(form) = page->simple_form(
-        editable = abap_true
-        )->content( `form` ).
-
-    form->label( `Table / CDS View` ).
-    form->input(
-        id              = `idTableInput`
-        value           = client->_bind( mv_table_name )
-        placeholder     = `e.g. MARA, T001, I_PRODUCT ...`
-        showsuggestion  = abap_true
-        suggestionitems = client->_bind( mt_suggestions )
-        suggest         = client->_event( val = `SUGGEST`
-                              t_arg = VALUE #( ( `${$parameters>/suggestValue}` ) ) )
-        submit          = client->_event( `LOAD_METADATA` )
-    )->get(
-    )->suggestion_items( )->get(
-        )->list_item(
-            text           = `{TABNAME}`
-            additionaltext = `{DDTEXT}` ).
-
-    " Set focus to table input on init
-    client->follow_up_action(
-        val   = client->cs_event-set_focus
-        t_arg = VALUE #( ( `idTableInput` ) ) ).
-
-    form->label( `Maximum number of hits` ).
-    form->input(
-        value       = client->_bind( mv_max_hits )
-        placeholder = |Default { c_default_max }, max { c_max_cap }| ).
-
-    " --- Footer ---
-    page->footer(
-        )->overflow_toolbar(
-            )->toolbar_spacer(
-            )->button(
-                text  = `Execute`
-                type  = `Emphasized`
-                icon  = `sap-icon://initiative`
-                press = client->_event( `LOAD_METADATA` ) ).
-
-    client->view_display( view->stringify( ) ).
+    " Before and after reading the metadata SE16N shows the same screen.
+    view_selection( abap_false ).
 
   ENDMETHOD.
 
 
   METHOD view_step_2.
 
-    " Use the classic z2ui5_cl_xml_view builder for step 2 because it
-    " requires dynamic loops (field dropdown items) which don't work
-    " well with the generic z2ui5_cl_ai_xml builder's chain-breaking.
-    DATA(view) = z2ui5_cl_xml_view=>factory( ).
+    view_selection( abap_true ).
 
-    DATA(page) = view->shell( )->page(
-        title = |Selection: { mv_table_name }| ).
+  ENDMETHOD.
 
-    IF mv_message IS NOT INITIAL.
-      page->message_strip(
-          text     = mv_message
-          type     = mv_message_type
-          showicon = abap_true ).
-    ENDIF.
 
-    " --- Variant toolbar ---
-    DATA(var_bar) = page->_generic(
-        name   = `Toolbar`
-        t_prop = VALUE #( ( n = `class` v = `sapUiSmallMarginBottom` ) ) ).
-    var_bar->_generic(
-        name   = `Input`
-        t_prop = VALUE #(
-            ( n = `value`       v = client->_bind( mv_variant_name ) )
-            ( n = `placeholder` v = `Variant name...` )
-            ( n = `width`       v = `200px` ) ) ).
-    var_bar->_generic(
-        name   = `Button`
-        t_prop = VALUE #(
-            ( n = `text`  v = `Save` )
-            ( n = `icon`  v = `sap-icon://save` )
-            ( n = `type`  v = `Emphasized` )
-            ( n = `press` v = client->_event( `SAVE_VARIANT` ) ) ) ).
-    var_bar->_generic(
-        name   = `ToolbarSpacer`
-        t_prop = VALUE #( ) ).
-    " Variant dropdown for loading
-    DATA(var_sel) = var_bar->_generic(
-        name   = `Select`
-        t_prop = VALUE #(
-            ( n = `width`    v = `250px` )
-            ( n = `change`   v = client->_event( val = `LOAD_VARIANT`
-                                  t_arg = VALUE #( ( `${$source>/selectedItem/key}` ) ) ) ) ) ).
-    DATA(var_items) = var_sel->_generic( `items` ).
-    var_items->_generic(
-        name   = `Item`
-        ns     = `core`
-        t_prop = VALUE #(
-            ( n = `xmlns:core` v = `sap.ui.core` )
-            ( n = `key`        v = `` )
-            ( n = `text`       v = `-- Load Variant --` ) ) ).
+  METHOD crit_from_fields.
+
+    CLEAR mt_crit.
+
+    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<f>).
+      IF <f>-low IS INITIAL AND <f>-high IS INITIAL.
+        CONTINUE.
+      ENDIF.
+      APPEND VALUE ty_s_crit(
+          key   = <f>-fname
+          fname = <f>-fname
+          sign  = `I`
+          opt   = COND string( WHEN <f>-opt IS INITIAL THEN `EQ` ELSE <f>-opt )
+          low   = <f>-low
+          high  = <f>-high ) TO mt_crit.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD view_selection.
+
+    DATA(view) = z2ui5_cl_ai_xml=>factory( ).
+    DATA(page) = zcl_zlk05_gui_frame=>open_window( view ).
+
+    zcl_zlk05_gui_frame=>build_status_bar( io_parent   = page
+                                          iv_message  = mv_message
+                                          iv_msg_type = mv_message_type ).
+
+    zcl_zlk05_gui_frame=>build_menu_bar(
+        io_parent  = page
+        it_entries = VALUE string_table(
+            ( `Table Display` ) ( `Edit` ) ( `Goto` ) ( `Extras` ) ( `System` ) ( `Help` ) ) ).
+
+    zcl_zlk05_gui_frame=>build_system_bar(
+        io_parent     = page
+        iv_back_event = COND string( WHEN iv_loaded = abap_true
+                                     THEN client->_event( `BACK_TO_INPUT` )
+                                     ELSE client->_event_nav_app_leave( ) ) ).
+
+    zcl_zlk05_gui_frame=>build_title_bar( io_parent = page
+                                          iv_title  = `General Table Display` ).
+
+    " Application function bar. Only the buttons that this app can serve are
+    " active, the remaining ones are shown the way the SAP GUI shows them.
+    zcl_zlk05_gui_frame=>build_app_bar(
+        io_parent  = page
+        it_buttons = VALUE zcl_zlk05_gui_frame=>ty_t_button(
+            ( icon = `sap-icon://history` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Background - not available in this environment` )
+            ( text = `Background` icon = ``
+              tooltip = `Execute in background - not available in this environment` )
+            ( text = `Number of Entries` icon = ``
+              tooltip = COND string( WHEN iv_loaded = abap_true
+                                     THEN `Number of Entries`
+                                     ELSE `Number of Entries - enter a table first` )
+              press   = COND string( WHEN iv_loaded = abap_true
+                                     THEN client->_event( `COUNT` ) ) )
+            ( sep = abap_true )
+            ( icon = `sap-icon://multi-select` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Choose fields - use the Output column below` )
+            ( icon = `sap-icon://table-view` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Select all fields - not available in this environment` )
+            ( icon = `sap-icon://grid` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Deselect all fields - not available in this environment` )
+            ( sep = abap_true )
+            ( text = `All Entries` icon = ``
+              tooltip = COND string( WHEN iv_loaded = abap_true
+                                     THEN `Display all entries up to the maximum number of hits`
+                                     ELSE `All Entries - enter a table first` )
+              press   = COND string( WHEN iv_loaded = abap_true
+                                     THEN client->_event( `EXECUTE` ) ) )
+            ( sep = abap_true )
+            ( icon = `sap-icon://zoom-out` color = zcl_zlk05_gui_frame=>c_grey
+              tooltip = `Delete selection criteria - clear the value fields` )
+            ( icon = `sap-icon://zoom-in` color = zcl_zlk05_gui_frame=>c_grey
+              tooltip = `Selection criteria - not available in this environment` ) ) ).
+
+    " ----- Work area: the classic dynpro selection screen -----
+    DATA(work) = page->open( `VBox`
+        )->a( n = `class`  v = `sapUiSmallMargin`
+        )->a( n = `height` v = zcl_zlk05_gui_frame=>c_work_height ).
+
+    " Table
+    DATA(row) = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Table` ).
+    DATA(tab_input) = row->open( `Input`
+        )->a( n = `id`              v = `idTableInput`
+        )->a( n = `value`           v = client->_bind( mv_table_name )
+        )->a( n = `width`           v = `17rem`
+        )->a( n = `showSuggestion`  v = `true`
+        )->a( n = `suggestionItems` v = client->_bind( mt_suggestions )
+        )->a( n = `suggest`         v = client->_event(
+                  val   = `SUGGEST`
+                  t_arg = VALUE #( ( `${$parameters>/suggestValue}` ) ) )
+        )->a( n = `submit`          v = client->_event( `LOAD_METADATA` ) ).
+    tab_input->open( `suggestionItems`
+        )->leaf( n = `Item` ns = `core`
+            )->a( n = `text`           v = `{TABNAME}`
+            )->a( n = `additionalText` v = `{DDTEXT}` ).
+    row->leaf( n = `Icon` ns = `core`
+        )->a( n = `src`     v = `sap-icon://arrow-right`
+        )->a( n = `size`    v = `1rem`
+        )->a( n = `color`   v = zcl_zlk05_gui_frame=>c_yellow
+        )->a( n = `class`   v = `sapUiTinyMarginBegin`
+        )->a( n = `tooltip` v = `Read the table definition`
+        )->a( n = `press`   v = client->_event( `LOAD_METADATA` ) ).
+    row->leaf( n = `Icon` ns = `core`
+        )->a( n = `src`     v = `sap-icon://search`
+        )->a( n = `size`    v = `1rem`
+        )->a( n = `color`   v = zcl_zlk05_gui_frame=>c_blue
+        )->a( n = `class`   v = `sapUiTinyMarginBegin`
+        )->a( n = `tooltip` v = `Search for a table - type a part of the name in the field` ).
+
+    " Text Table / No Texts
+    row = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Text Table` ).
+    row->leaf( `Input`
+        )->a( n = `width`   v = `17rem`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `tooltip` v = `Text table - not evaluated in this environment` ).
+    row->leaf( `CheckBox`
+        )->a( n = `text`    v = `No Texts`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `class`   v = `sapUiMediumMarginBegin`
+        )->a( n = `tooltip` v = `No texts - not available in this environment` ).
+
+    " Displ. Variant - here the variants of this app are maintained
+    row = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Displ. Variant` ).
+    row->leaf( `Input`
+        )->a( n = `value`       v = client->_bind( mv_variant_name )
+        )->a( n = `width`       v = `9rem`
+        )->a( n = `placeholder` v = `Variant`
+        )->a( n = `tooltip`     v = `Name of the variant that is saved` ).
+    row->leaf( `Button`
+        )->a( n = `icon`    v = `sap-icon://save`
+        )->a( n = `type`    v = `Transparent`
+        )->a( n = `tooltip` v = `Save the selection as a variant`
+        )->a( n = `press`   v = client->_event( `SAVE_VARIANT` ) ).
+    DATA(var_sel) = row->open( `Select`
+        )->a( n = `width`       v = `13rem`
+        )->a( n = `selectedKey` v = client->_bind( mv_variant_sel )
+        )->a( n = `tooltip`     v = `Get variant`
+        )->a( n = `change`      v = client->_event( `LOAD_VARIANT` ) ).
+    DATA(var_items) = var_sel->open( `items` ).
+    var_items->leaf( n = `Item` ns = `core`
+        )->a( n = `key`  v = ``
+        )->a( n = `text` v = `Get Variant...` ).
     LOOP AT mt_variant_list ASSIGNING FIELD-SYMBOL(<vl>).
-      var_items->_generic(
-          name   = `Item`
-          ns     = `core`
-          t_prop = VALUE #(
-              ( n = `xmlns:core` v = `sap.ui.core` )
-              ( n = `key`        v = <vl>-id )
-              ( n = `text`       v = <vl>-name ) ) ).
+      var_items->leaf( n = `Item` ns = `core`
+          )->a( n = `key`  v = <vl>-id
+          )->a( n = `text` v = <vl>-name ).
     ENDLOOP.
+    row->leaf( `Button`
+        )->a( n = `icon`    v = `sap-icon://delete`
+        )->a( n = `type`    v = `Transparent`
+        )->a( n = `tooltip` v = `Delete the selected variant`
+        )->a( n = `press`   v = client->_event( `DEL_VARIANT` ) ).
 
-    " --- Panel: Output fields ---
-    DATA(field_panel) = page->panel(
-        headertext = `Output Fields & Sort`
-        expandable = abap_true
-        expanded   = abap_true ).
+    " Max. Number of Hits / Maintain Entries
+    row = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Max. Number of Hits` ).
+    row->leaf( `Input`
+        )->a( n = `value`   v = client->_bind( mv_max_hits )
+        )->a( n = `width`   v = `6rem`
+        )->a( n = `tooltip` v = |Default { c_default_max }, maximum { c_max_cap }| ).
+    row->leaf( `CheckBox`
+        )->a( n = `text`    v = `Maintain Entries`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `class`   v = `sapUiMediumMarginBegin`
+        )->a( n = `tooltip` v = `Maintain entries - this app reads data only` ).
 
-    DATA(field_table) = field_panel->table(
-        items  = client->_bind( mt_fields )
-        sticky = `ColumnHeaders` ).
+    " Get Field
+    row = work->open( `HBox`
+        )->a( n = `alignItems` v = `Center`
+        )->a( n = `class`      v = `sapUiSmallMarginTop` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Get Field` ).
+    row->leaf( `Input`
+        )->a( n = `width`   v = `17rem`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `tooltip` v = `Get field - not available in this environment` ).
 
-    field_table->columns(
-        )->column( width = `35%` )->text( `Field`
-        )->get_parent( )->column( width = `30%` )->text( `Type`
-        )->get_parent( )->column( width = `12%` )->text( `Output`
-        )->get_parent( )->column( )->text( `Sort` ).
+    " ----- Selection Criteria -----
+    work->leaf( `Title`
+        )->a( n = `text`  v = `Selection Criteria`
+        )->a( n = `level` v = `H4`
+        )->a( n = `class` v = `sapUiSmallMarginTop` ).
 
-    DATA(field_cells) = field_table->items( )->column_list_item( )->cells( ).
-    field_cells->text( `{LABEL}` ).
-    field_cells->text( `{FTYPE}` ).
-    field_cells->checkbox( selected = `{VISIBLE}` ).
-    DATA(sort_sel) = field_cells->select( selectedkey = `{SORT}` ).
-    sort_sel->item( key = `` text = `(none)` ).
-    sort_sel->item( key = `A` text = `Ascending` ).
-    sort_sel->item( key = `D` text = `Descending` ).
+    DATA(scroll) = work->open( `ScrollContainer`
+        )->a( n = `width`    v = `100%`
+        )->a( n = `height`   v = `calc(100vh - 27rem)`
+        )->a( n = `vertical` v = `true`
+        )->a( n = `horizontal` v = `true` ).
 
-    " --- Panel: Selection criteria ---
-    DATA(crit_panel) = page->panel(
-        headertext = `Selection Criteria`
-        expandable = abap_true
-        expanded   = abap_true ).
+    DATA(crit) = scroll->open( `Table`
+        )->a( n = `items`      v = client->_bind( mt_fields )
+        )->a( n = `sticky`     v = `ColumnHeaders`
+        )->a( n = `noDataText` v = `Enter a table name and choose Continue` ).
 
-    DATA(crit_table) = crit_panel->table(
-        items  = client->_bind( mt_crit )
-        sticky = `ColumnHeaders` ).
+    DATA(cols) = crit->open( `columns` ).
+    cols->open( `Column` )->a( n = `width` v = `14rem`
+        )->leaf( `Text` )->a( n = `text` v = `Fld Name` ).
+    cols->open( `Column` )->a( n = `width` v = `7rem`
+        )->leaf( `Text` )->a( n = `text` v = `O.` ).
+    cols->open( `Column` )->a( n = `width` v = `11rem`
+        )->leaf( `Text` )->a( n = `text` v = `Frm-Val.` ).
+    cols->open( `Column` )->a( n = `width` v = `11rem`
+        )->leaf( `Text` )->a( n = `text` v = `To-Value` ).
+    cols->open( `Column` )->a( n = `width` v = `4rem`
+        )->leaf( `Text` )->a( n = `text` v = `More` ).
+    cols->open( `Column` )->a( n = `width` v = `5rem`
+        )->leaf( `Text` )->a( n = `text` v = `Output` ).
+    cols->open( `Column` )->a( n = `width` v = `11rem`
+        )->leaf( `Text` )->a( n = `text` v = `Technical Name` ).
+    cols->open( `Column` )->a( n = `width` v = `8rem`
+        )->leaf( `Text` )->a( n = `text` v = `Sort` ).
 
-    crit_table->columns(
-        )->column( width = `22%` )->text( `Field`
-        )->get_parent( )->column( width = `10%` )->text( `Sign`
-        )->get_parent( )->column( width = `14%` )->text( `Operator`
-        )->get_parent( )->column( )->text( `Low`
-        )->get_parent( )->column( )->text( `High`
-        )->get_parent( )->column( width = `5%` )->text( `` ).
+    DATA(cells) = crit->open( `items`
+        )->open( `ColumnListItem`
+        )->open( `cells` ).
 
-    DATA(crit_cells) = crit_table->items( )->column_list_item( )->cells( ).
+    cells->leaf( `Text` )->a( n = `text` v = `{LABEL}` ).
 
-    " Field dropdown - built dynamically from mt_fields
-    DATA(fname_sel) = crit_cells->select( selectedkey = `{FNAME}` ).
-    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<fld>).
-      fname_sel->item( key = <fld>-fname text = <fld>-label ).
-    ENDLOOP.
+    DATA(opt_sel) = cells->open( `Select`
+        )->a( n = `selectedKey` v = `{OPT}`
+        )->a( n = `width`       v = `6.5rem`
+        )->a( n = `tooltip`     v = `Selection option` ).
+    DATA(opt_items) = opt_sel->open( `items` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `EQ` )->a( n = `text` v = `=` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `NE` )->a( n = `text` v = `<>` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `BT` )->a( n = `text` v = `Between` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `CP` )->a( n = `text` v = `Pattern` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `GT` )->a( n = `text` v = `>` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `LT` )->a( n = `text` v = `<` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `GE` )->a( n = `text` v = `>=` ).
+    opt_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `LE` )->a( n = `text` v = `<=` ).
 
-    " Sign dropdown
-    DATA(sign_sel) = crit_cells->select( selectedkey = `{SIGN}` ).
-    sign_sel->item( key = `I` text = `Include` ).
-    sign_sel->item( key = `E` text = `Exclude` ).
+    cells->leaf( `Input` )->a( n = `value` v = `{LOW}` ).
+    cells->leaf( `Input` )->a( n = `value` v = `{HIGH}` ).
 
-    " Operator dropdown
-    DATA(opt_sel) = crit_cells->select( selectedkey = `{OPT}` ).
-    opt_sel->item( key = `EQ` text = `=` ).
-    opt_sel->item( key = `NE` text = `<>` ).
-    opt_sel->item( key = `BT` text = `Between` ).
-    opt_sel->item( key = `CP` text = `Pattern (*)` ).
-    opt_sel->item( key = `GT` text = `>` ).
-    opt_sel->item( key = `LT` text = `<` ).
-    opt_sel->item( key = `GE` text = `>=` ).
-    opt_sel->item( key = `LE` text = `<=` ).
+    cells->leaf( `Button`
+        )->a( n = `icon`    v = `sap-icon://multiselect-all`
+        )->a( n = `type`    v = `Transparent`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `tooltip` v = `Multiple selection - not available in this environment` ).
 
-    " Low / High / Delete button
-    crit_cells->input( value = `{LOW}` ).
-    crit_cells->input( value = `{HIGH}` ).
-    crit_cells->button(
-        icon  = `sap-icon://decline`
-        type  = `Transparent`
-        press = client->_event( val = `DEL_CRIT` t_arg = VALUE #( ( `${KEY}` ) ) ) ).
+    cells->leaf( `CheckBox` )->a( n = `selected` v = `{VISIBLE}` ).
+    cells->leaf( `Text`     )->a( n = `text`     v = `{FNAME}` ).
 
-    " Add-row button below the table
-    crit_panel->button(
-        text  = `Add row`
-        icon  = `sap-icon://add`
-        press = client->_event( `ADD_CRIT` ) ).
+    " The sort column is not part of the original screen. It is kept here
+    " because this app has no sortable ALV grid.
+    DATA(sort_sel) = cells->open( `Select`
+        )->a( n = `selectedKey` v = `{SORT}`
+        )->a( n = `width`       v = `7rem` ).
+    DATA(sort_items) = sort_sel->open( `items` ).
+    sort_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = ``  )->a( n = `text` v = `` ).
+    sort_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `A` )->a( n = `text` v = `Ascending` ).
+    sort_items->leaf( n = `Item` ns = `core` )->a( n = `key` v = `D` )->a( n = `text` v = `Descending` ).
 
-    " --- Footer ---
-    page->footer(
-        )->overflow_toolbar(
-            )->toolbar_spacer(
-            )->button(
-                text  = `Back`
-                icon  = `sap-icon://nav-back`
-                press = client->_event( `BACK_TO_INPUT` )
-            )->button(
-                text  = `Number of Entries`
-                icon  = `sap-icon://number-sign`
-                press = client->_event( `COUNT` )
-            )->button(
-                text  = `Execute`
-                type  = `Emphasized`
-                icon  = `sap-icon://search`
-                press = client->_event( `EXECUTE` ) ).
+    " The cursor sits in the table field, exactly like the SAP GUI
+    IF iv_loaded = abap_false.
+      client->follow_up_action(
+          val   = client->cs_event-set_focus
+          t_arg = VALUE #( ( `idTableInput` ) ) ).
+    ENDIF.
 
     client->view_display( view->stringify( ) ).
 
@@ -487,124 +555,160 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
   METHOD view_step_3.
 
-    " Use classic builder for dynamic column generation via loops
-    DATA(view) = z2ui5_cl_xml_view=>factory( ).
+    DATA(view) = z2ui5_cl_ai_xml=>factory( ).
+    DATA(page) = zcl_zlk05_gui_frame=>open_window( view ).
 
-    DATA(lo_root) = COND #(
-        WHEN mv_show_shell = abap_true
-        THEN view->shell( )
-        ELSE view ).
-    DATA(page) = lo_root->page(
-        title = |Result: { mv_table_name } ({ mv_total_rows } rows)| ).
+    zcl_zlk05_gui_frame=>build_status_bar( io_parent   = page
+                                          iv_message  = mv_message
+                                          iv_msg_type = mv_message_type ).
 
-    IF mv_message IS NOT INITIAL.
-      page->message_strip(
-          text     = mv_message
-          type     = mv_message_type
-          showicon = abap_true ).
-    ENDIF.
+    zcl_zlk05_gui_frame=>build_menu_bar(
+        io_parent  = page
+        it_entries = VALUE string_table(
+            ( `Table Entry` ) ( `Edit` ) ( `Goto` ) ( `System` ) ( `Help` ) ) ).
 
-    " Determine which fields to show
+    zcl_zlk05_gui_frame=>build_system_bar(
+        io_parent     = page
+        iv_back_event = client->_event( `BACK_TO_SEL` ) ).
+
+    zcl_zlk05_gui_frame=>build_title_bar(
+        io_parent = page
+        iv_title  = |{ to_upper( mv_table_name ) }: Display of Entries Found| ).
+
+    zcl_zlk05_gui_frame=>build_app_bar(
+        io_parent  = page
+        it_buttons = VALUE zcl_zlk05_gui_frame=>ty_t_button(
+            ( icon = `sap-icon://refresh` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Refresh`
+              press   = client->_event( `EXECUTE` ) )
+            ( icon = `sap-icon://wrench` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Settings - not available in this environment` )
+            ( icon = `sap-icon://group-2` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Check table - not available in this environment` )
+            ( icon = `sap-icon://document-text` color = zcl_zlk05_gui_frame=>c_blue
+              tooltip = `Technical information - not available in this environment` ) ) ).
+
+    " ----- Work area -----
+    DATA(work) = page->open( `VBox`
+        )->a( n = `class`  v = `sapUiSmallMargin`
+        )->a( n = `height` v = zcl_zlk05_gui_frame=>c_work_height ).
+
+    DATA(row) = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Search in Table` ).
+    row->leaf( `Text` )->a( n = `text` v = to_upper( mv_table_name ) ).
+
+    row = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Number of Hits` ).
+    row->leaf( `Text` )->a( n = `text` v = |{ mv_total_rows }| ).
+
+    row = work->open( `HBox` )->a( n = `alignItems` v = `Center` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Runtime` ).
+    row->leaf( `Text`
+        )->a( n = `text`    v = `0`
+        )->a( n = `tooltip` v = `Runtime is not measured in this environment` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row
+                                    iv_text   = `Maximum No. of Hits`
+                                    iv_width  = `13rem` ).
+    row->leaf( `Input`
+        )->a( n = `value` v = client->_bind( mv_max_hits )
+        )->a( n = `width` v = `6rem` ).
+
+    row = work->open( `HBox`
+        )->a( n = `alignItems` v = `Center`
+        )->a( n = `class`      v = `sapUiSmallMarginTop` ).
+    zcl_zlk05_gui_frame=>add_label( io_parent = row iv_text = `Insert Column` ).
+    row->leaf( `Input`
+        )->a( n = `width`   v = `17rem`
+        )->a( n = `enabled` v = `false`
+        )->a( n = `tooltip` v = `Insert column - use the Output column of the selection screen` ).
+
+    " ----- ALV grid toolbar -----
+    DATA(alv_bar) = work->open( `Toolbar`
+        )->a( n = `design` v = `Transparent`
+        )->a( n = `height` v = `2.1rem` ).
+
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( icon = `sap-icon://table-view` color = zcl_zlk05_gui_frame=>c_blue
+                             tooltip = `Choose layout - not available in this environment` ) ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( icon = `sap-icon://sort` color = zcl_zlk05_gui_frame=>c_blue
+                             tooltip = `Sort - use the Sort column of the selection screen` ) ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( icon = `sap-icon://filter` color = zcl_zlk05_gui_frame=>c_blue
+                             tooltip = `Filter - use the selection criteria` ) ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( sep = abap_true ) ).
+
+    " Find - the SAP GUI opens a dialog here, the field is shown directly
+    alv_bar->leaf( n = `Icon` ns = `core`
+        )->a( n = `src`   v = `sap-icon://search`
+        )->a( n = `size`  v = `1.05rem`
+        )->a( n = `color` v = zcl_zlk05_gui_frame=>c_blue
+        )->a( n = `class` v = `sapUiTinyMarginEnd`
+        )->a( n = `tooltip` v = `Find` ).
+    alv_bar->leaf( `SearchField`
+        )->a( n = `value`       v = client->_bind( mv_search )
+        )->a( n = `placeholder` v = `Find in entries`
+        )->a( n = `width`       v = `15rem`
+        )->a( n = `search`      v = client->_event( `SEARCH_RESULT` ) ).
+
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( sep = abap_true ) ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( icon = `sap-icon://print` color = zcl_zlk05_gui_frame=>c_grey
+                             tooltip = `Print - not available in this environment` ) ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #( icon = `sap-icon://excel-attachment` color = zcl_zlk05_gui_frame=>c_grey
+                             tooltip = `Export - not available in this environment` ) ).
+
+    alv_bar->leaf( `ToolbarSpacer` ).
+
+    alv_bar->leaf( `Text` )->a( n = `text` v = |{ mv_total_rows } Entries| ).
+    alv_bar->leaf( `ToolbarSeparator` ).
+    zcl_zlk05_gui_frame=>add_button( io_bar = alv_bar
+        is_button = VALUE #(
+            icon    = COND string( WHEN mv_show_shell = abap_true
+                                   THEN `sap-icon://full-screen`
+                                   ELSE `sap-icon://exit-full-screen` )
+            color   = zcl_zlk05_gui_frame=>c_blue
+            tooltip = `Full screen on/off`
+            press   = client->_event( `TOGGLE_SHELL` ) ) ).
+
+    " ----- ALV grid -----
+    " Which fields have to be displayed
     DATA(lv_any_visible) = abap_false.
     LOOP AT mt_fields TRANSPORTING NO FIELDS WHERE visible = abap_true.
       lv_any_visible = abap_true.
       EXIT.
     ENDLOOP.
 
-    " Count visible columns
-    DATA(lv_vis_cols) = 0.
-    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<fc>).
-      IF lv_any_visible = abap_true AND <fc>-visible = abap_false.
-        CONTINUE.
-      ENDIF.
-      lv_vis_cols = lv_vis_cols + 1.
-    ENDLOOP.
+    " sap.ui.table.Table gives an ALV like grid with horizontal scrolling.
+    " visibleRowCountMode=Auto fills the available height - a visibleRowCount
+    " must NOT be supplied in addition.
+    DATA(grid) = work->open( n = `Table` ns = `table`
+        )->a( n = `xmlns:table`         v = `sap.ui.table`
+        )->a( n = `rows`                v = client->_bind( mt_rows )
+        )->a( n = `visibleRowCountMode` v = `Auto`
+        )->a( n = `selectionMode`       v = `None`
+        )->a( n = `rowHeight`           v = `28`
+        )->a( n = `minAutoRowCount`     v = `10` ).
 
-    " --- Search bar + Shell toggle ---
-    DATA(search_bar) = page->_generic(
-        name   = `Toolbar`
-        t_prop = VALUE #( ( n = `class` v = `sapUiSmallMarginBottom` ) ) ).
-    search_bar->_generic(
-        name   = `SearchField`
-        t_prop = VALUE #(
-            ( n = `value`       v = client->_bind( mv_search ) )
-            ( n = `placeholder` v = `Search in results...` )
-            ( n = `width`       v = `300px` )
-            ( n = `liveChange`  v = client->_event( `SEARCH_RESULT` ) ) ) ).
-    search_bar->_generic(
-        name   = `ToolbarSpacer`
-        t_prop = VALUE #( ) ).
-    search_bar->_generic(
-        name   = `Label`
-        t_prop = VALUE #(
-            ( n = `text` v = |{ mv_total_rows } rows| ) ) ).
-    search_bar->_generic(
-        name   = `ToolbarSeparator`
-        t_prop = VALUE #( ) ).
-    search_bar->_generic(
-        name   = `Label`
-        t_prop = VALUE #(
-            ( n = `text` v = `Shell` ) ) ).
-    search_bar->_generic(
-        name   = `Switch`
-        t_prop = VALUE #(
-            ( n = `state` v = client->_bind( mv_show_shell ) )
-            ( n = `change` v = client->_event( `TOGGLE_SHELL` ) ) ) ).
-
-    " Use sap.ui.table.Table for proper horizontal scrolling (like ALV)
-    " visibleRowCountMode=Auto fills the available page height
-    DATA(lv_row_count) = COND string(
-        WHEN mv_total_rows < 20 THEN |{ mv_total_rows }|
-        ELSE `20` ).
-
-    DATA(grid_table) = page->_generic(
-        name   = `Table`
-        ns     = `table`
-        t_prop = VALUE #(
-            ( n = `xmlns:table`          v = `sap.ui.table` )
-            ( n = `rows`                 v = client->_bind( mt_rows ) )
-            ( n = `visibleRowCountMode`  v = `Auto` )
-            ( n = `visibleRowCount`      v = lv_row_count )
-            ( n = `selectionMode`        v = `None` )
-            ( n = `rowHeight`            v = `32` )
-            ( n = `minAutoRowCount`      v = `10` ) ) ).
-
-    " Build columns dynamically with sap.ui.table.Column
-    DATA(grid_cols) = grid_table->_generic( name = `columns` ns = `table` ).
+    DATA(grid_cols) = grid->open( n = `columns` ns = `table` ).
     LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<col>).
       IF lv_any_visible = abap_true AND <col>-visible = abap_false.
         CONTINUE.
       ENDIF.
-      DATA(grid_col) = grid_cols->_generic(
-          name   = `Column`
-          ns     = `table`
-          t_prop = VALUE #(
-              ( n = `width`    v = `8rem` )
-              ( n = `sortProperty` v = <col>-col_id )
-              ( n = `filterProperty` v = <col>-col_id ) ) ).
-      " Label
-      grid_col->_generic( name = `label` ns = `table`
-          )->_generic( name = `Label` t_prop = VALUE #( ( n = `text` v = <col>-fname ) ) ).
-      " Template
-      grid_col->_generic( name = `template` ns = `table`
-          )->_generic( name = `Text` t_prop = VALUE #(
-              ( n = `text`     v = |\{{ <col>-col_id }\}| )
-              ( n = `wrapping` v = `false` ) ) ).
+      DATA(grid_col) = grid_cols->open( n = `Column` ns = `table`
+          )->a( n = `width`          v = `8rem`
+          )->a( n = `sortProperty`   v = <col>-col_id
+          )->a( n = `filterProperty` v = <col>-col_id ).
+      grid_col->open( n = `label` ns = `table`
+          )->leaf( `Label` )->a( n = `text` v = <col>-fname ).
+      grid_col->open( n = `template` ns = `table`
+          )->leaf( `Text`
+              )->a( n = `text`     v = |\{{ <col>-col_id }\}|
+              )->a( n = `wrapping` v = `false` ).
     ENDLOOP.
-
-    " --- Footer ---
-    page->footer(
-        )->overflow_toolbar(
-            )->toolbar_spacer(
-            )->button(
-                text  = `Back to Selection`
-                icon  = `sap-icon://nav-back`
-                press = client->_event( `BACK_TO_SEL` )
-            )->button(
-                text  = `New Search`
-                type  = `Emphasized`
-                icon  = `sap-icon://restart`
-                press = client->_event( `BACK_TO_INPUT` ) ).
 
     client->view_display( view->stringify( ) ).
 
@@ -624,7 +728,7 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
     mv_table_name = to_upper( mv_table_name ).
 
     IF mv_table_name IS INITIAL.
-      mv_message      = `Please enter a table or CDS view name.`.
+      mv_message      = `Enter a table name.`.
       mv_message_type = `Error`.
       RETURN.
     ENDIF.
@@ -638,74 +742,90 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
           WHEN cl_abap_typedescr=>kind_struct.
             lo_struct ?= lo_typedescr.
           WHEN OTHERS.
-            mv_message      = |{ mv_table_name } is not a table or structure.|.
+            mv_message      = |{ mv_table_name } is not a table or a structure.|.
             mv_message_type = `Error`.
             RETURN.
         ENDCASE.
       CATCH cx_root INTO DATA(lx).
-        mv_message      = |Cannot resolve { mv_table_name }: { lx->get_text( ) }|.
+        mv_message      = |Table { mv_table_name } does not exist: { lx->get_text( ) }|.
         mv_message_type = `Error`.
         RETURN.
     ENDTRY.
 
-    " Use get_ddic_field_list to flatten includes and get field texts
-    DATA lv_idx TYPE i.
-    TRY.
-        DATA(lt_ddic) = lo_struct->get_ddic_field_list( ).
-        LOOP AT lt_ddic ASSIGNING FIELD-SYMBOL(<dd>).
-          IF <dd>-fieldname CP `.INCLUDE*` OR <dd>-fieldname CP `.INCLU*`.
-            CONTINUE.
-          ENDIF.
+    " get_ddic_field_list flattens includes and supplies the field labels.
+    " Careful: the method raises CLASSIC exceptions (not_found / no_ddic_type).
+    " A TRY / CATCH cx_root does NOT catch those - a non DDIC type would end in
+    " a runtime abortion instead of reaching the RTTI fallback.
+    DATA lv_idx  TYPE i.
+    DATA lt_ddic TYPE ddfields.
+    lo_struct->get_ddic_field_list(
+      RECEIVING  p_field_list = lt_ddic
+      EXCEPTIONS not_found    = 1
+                 no_ddic_type = 2
+                 OTHERS       = 3 ).
+
+    IF sy-subrc = 0.
+      LOOP AT lt_ddic ASSIGNING FIELD-SYMBOL(<dd>).
+        IF <dd>-fieldname CP `.INCLU*`.
+          CONTINUE.
+        ENDIF.
+        lv_idx = lv_idx + 1.
+        IF lv_idx > c_max_cols.
+          EXIT.
+        ENDIF.
+        DATA(lv_label) = COND string(
+            WHEN <dd>-scrtext_m IS NOT INITIAL THEN <dd>-scrtext_m
+            WHEN <dd>-scrtext_s IS NOT INITIAL THEN <dd>-scrtext_s
+            WHEN <dd>-fieldtext IS NOT INITIAL THEN <dd>-fieldtext
+            ELSE <dd>-fieldname ).
+        APPEND VALUE #(
+            fname   = <dd>-fieldname
+            label   = |{ <dd>-fieldname } ({ lv_label })|
+            ftype   = |{ <dd>-datatype }({ <dd>-leng })|
+            col_id  = |C{ lv_idx WIDTH = 2 PAD = '0' ALIGN = RIGHT }|
+            visible = abap_true
+            sort    = ``
+            opt     = `EQ` ) TO mt_fields.
+      ENDLOOP.
+    ELSE.
+      " Fallback for non-DDIC types: flatten the includes manually
+      DATA(lt_comp) = lo_struct->get_components( ).
+      LOOP AT lt_comp ASSIGNING FIELD-SYMBOL(<comp>).
+        IF <comp>-type IS NOT BOUND.
+          CONTINUE.
+        ENDIF.
+        IF <comp>-type->kind = cl_abap_typedescr=>kind_struct.
+          DATA(lo_nested) = CAST cl_abap_structdescr( <comp>-type ).
+          LOOP AT lo_nested->get_components( ) ASSIGNING FIELD-SYMBOL(<nc>).
+            lv_idx = lv_idx + 1.
+            IF lv_idx > c_max_cols.
+              EXIT.
+            ENDIF.
+            APPEND VALUE #(
+                fname   = <nc>-name
+                label   = <nc>-name
+                ftype   = COND #( WHEN <nc>-type IS BOUND THEN <nc>-type->absolute_name ELSE `?` )
+                col_id  = |C{ lv_idx WIDTH = 2 PAD = '0' ALIGN = RIGHT }|
+                visible = abap_true
+                sort    = ``
+                opt     = `EQ` ) TO mt_fields.
+          ENDLOOP.
+        ELSE.
           lv_idx = lv_idx + 1.
           IF lv_idx > c_max_cols.
             EXIT.
           ENDIF.
-          DATA(lv_label) = COND string(
-              WHEN <dd>-scrtext_m IS NOT INITIAL THEN <dd>-scrtext_m
-              WHEN <dd>-scrtext_s IS NOT INITIAL THEN <dd>-scrtext_s
-              WHEN <dd>-fieldtext IS NOT INITIAL THEN <dd>-fieldtext
-              ELSE <dd>-fieldname ).
           APPEND VALUE #(
-              fname   = <dd>-fieldname
-              label   = |{ <dd>-fieldname } ({ lv_label })|
-              ftype   = |{ <dd>-datatype }({ <dd>-leng })|
+              fname   = <comp>-name
+              label   = <comp>-name
+              ftype   = <comp>-type->absolute_name
               col_id  = |C{ lv_idx WIDTH = 2 PAD = '0' ALIGN = RIGHT }|
               visible = abap_true
-              sort    = `` ) TO mt_fields.
-        ENDLOOP.
-      CATCH cx_root.
-        " Fallback for non-DDIC objects: flatten includes manually
-        DATA(lt_comp) = lo_struct->get_components( ).
-        LOOP AT lt_comp ASSIGNING FIELD-SYMBOL(<comp>).
-          IF <comp>-type IS NOT BOUND.
-            CONTINUE.
-          ENDIF.
-          IF <comp>-type->kind = cl_abap_typedescr=>kind_struct.
-            DATA(lo_nested) = CAST cl_abap_structdescr( <comp>-type ).
-            LOOP AT lo_nested->get_components( ) ASSIGNING FIELD-SYMBOL(<nc>).
-              lv_idx = lv_idx + 1.
-              IF lv_idx > c_max_cols. EXIT. ENDIF.
-              APPEND VALUE #(
-                  fname   = <nc>-name
-                  label   = <nc>-name
-                  ftype   = COND #( WHEN <nc>-type IS BOUND THEN <nc>-type->absolute_name ELSE `?` )
-                  col_id  = |C{ lv_idx WIDTH = 2 PAD = '0' ALIGN = RIGHT }|
-                  visible = abap_true
-                  sort    = `` ) TO mt_fields.
-            ENDLOOP.
-          ELSE.
-            lv_idx = lv_idx + 1.
-            IF lv_idx > c_max_cols. EXIT. ENDIF.
-            APPEND VALUE #(
-                fname   = <comp>-name
-                label   = <comp>-name
-                ftype   = <comp>-type->absolute_name
-                col_id  = |C{ lv_idx WIDTH = 2 PAD = '0' ALIGN = RIGHT }|
-                visible = abap_true
-                sort    = `` ) TO mt_fields.
-          ENDIF.
-        ENDLOOP.
-    ENDTRY.
+              sort    = ``
+              opt     = `EQ` ) TO mt_fields.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
 
     IF mt_fields IS INITIAL.
       mv_message      = |No fields found for { mv_table_name }.|.
@@ -713,65 +833,137 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    mv_message = |Loaded { lines( mt_fields ) } fields. Add selection criteria and execute.|.
+    mv_message = |{ lines( mt_fields ) } fields read. Maintain the selection criteria and choose Execute.|.
     mv_message_type = `Success`.
     mv_step         = 2.
 
   ENDMETHOD.
 
 
-  METHOD execute_query.
+  METHOD build_condition.
 
-    DATA: lr_data  TYPE REF TO data,
-          lv_where TYPE string,
-          lv_max   TYPE i.
+    DATA(lv_low) = is_crit-low.
+    REPLACE ALL OCCURRENCES OF `'` IN lv_low WITH `''`.
 
-    CLEAR: mt_rows, mv_message.
-    mv_total_rows = 0.
+    CASE is_crit-opt.
+      WHEN `EQ`.
+        result = |{ is_crit-fname } = '{ lv_low }'|.
+      WHEN `NE`.
+        result = |{ is_crit-fname } <> '{ lv_low }'|.
+      WHEN `GT`.
+        result = |{ is_crit-fname } > '{ lv_low }'|.
+      WHEN `GE`.
+        result = |{ is_crit-fname } >= '{ lv_low }'|.
+      WHEN `LT`.
+        result = |{ is_crit-fname } < '{ lv_low }'|.
+      WHEN `LE`.
+        result = |{ is_crit-fname } <= '{ lv_low }'|.
+      WHEN `CP`.
+        DATA(lv_like) = lv_low.
+        REPLACE ALL OCCURRENCES OF `*` IN lv_like WITH `%`.
+        REPLACE ALL OCCURRENCES OF `+` IN lv_like WITH `_`.
+        result = |{ is_crit-fname } LIKE '{ lv_like }'|.
+      WHEN `BT`.
+        DATA(lv_high) = is_crit-high.
+        REPLACE ALL OCCURRENCES OF `'` IN lv_high WITH `''`.
+        result = |{ is_crit-fname } BETWEEN '{ lv_low }' AND '{ lv_high }'|.
+      WHEN OTHERS.
+        result = |{ is_crit-fname } = '{ lv_low }'|.
+    ENDCASE.
 
-    " Build WHERE clause from criteria
-    DATA lt_where TYPE STANDARD TABLE OF string.
+  ENDMETHOD.
+
+
+  METHOD build_where.
+
+    DATA lt_field TYPE STANDARD TABLE OF string WITH EMPTY KEY.
+    DATA lt_and   TYPE STANDARD TABLE OF string WITH EMPTY KEY.
+    DATA lt_incl  TYPE STANDARD TABLE OF string WITH EMPTY KEY.
+    DATA lt_excl  TYPE STANDARD TABLE OF string WITH EMPTY KEY.
+
+    " distinct field names in the order of the selection screen
     LOOP AT mt_crit ASSIGNING FIELD-SYMBOL(<c>) WHERE fname IS NOT INITIAL.
       IF <c>-low IS INITIAL AND <c>-high IS INITIAL.
         CONTINUE.
       ENDIF.
-      DATA(lv_low) = <c>-low.
-      REPLACE ALL OCCURRENCES OF `'` IN lv_low WITH `''`.
-
-      CASE <c>-opt.
-        WHEN `EQ`.
-          APPEND |{ <c>-fname } = '{ lv_low }'| TO lt_where.
-        WHEN `NE`.
-          APPEND |{ <c>-fname } <> '{ lv_low }'| TO lt_where.
-        WHEN `GT`.
-          APPEND |{ <c>-fname } > '{ lv_low }'| TO lt_where.
-        WHEN `GE`.
-          APPEND |{ <c>-fname } >= '{ lv_low }'| TO lt_where.
-        WHEN `LT`.
-          APPEND |{ <c>-fname } < '{ lv_low }'| TO lt_where.
-        WHEN `LE`.
-          APPEND |{ <c>-fname } <= '{ lv_low }'| TO lt_where.
-        WHEN `CP`.
-          DATA(lv_like) = lv_low.
-          REPLACE ALL OCCURRENCES OF `*` IN lv_like WITH `%`.
-          REPLACE ALL OCCURRENCES OF `+` IN lv_like WITH `_`.
-          APPEND |{ <c>-fname } LIKE '{ lv_like }'| TO lt_where.
-        WHEN `BT`.
-          DATA(lv_high) = <c>-high.
-          REPLACE ALL OCCURRENCES OF `'` IN lv_high WITH `''`.
-          APPEND |{ <c>-fname } BETWEEN '{ lv_low }' AND '{ lv_high }'| TO lt_where.
-        WHEN OTHERS.
-          APPEND |{ <c>-fname } = '{ lv_low }'| TO lt_where.
-      ENDCASE.
+      IF NOT line_exists( lt_field[ table_line = <c>-fname ] ).
+        APPEND <c>-fname TO lt_field.
+      ENDIF.
     ENDLOOP.
 
-    IF lt_where IS NOT INITIAL.
-      lv_where = concat_lines_of( table = lt_where sep = ` AND ` ).
+    LOOP AT lt_field INTO DATA(lv_fname).
+      CLEAR: lt_incl, lt_excl.
+      LOOP AT mt_crit ASSIGNING <c> WHERE fname = lv_fname.
+        IF <c>-low IS INITIAL AND <c>-high IS INITIAL.
+          CONTINUE.
+        ENDIF.
+        DATA(lv_cond) = build_condition( <c> ).
+        IF lv_cond IS INITIAL.
+          CONTINUE.
+        ENDIF.
+        IF <c>-sign = `E`.
+          APPEND lv_cond TO lt_excl.
+        ELSE.
+          APPEND lv_cond TO lt_incl.
+        ENDIF.
+      ENDLOOP.
+      IF lt_incl IS NOT INITIAL.
+        APPEND |( { concat_lines_of( table = lt_incl sep = ` OR ` ) } )| TO lt_and.
+      ENDIF.
+      IF lt_excl IS NOT INITIAL.
+        APPEND |NOT ( { concat_lines_of( table = lt_excl sep = ` OR ` ) } )| TO lt_and.
+      ENDIF.
+    ENDLOOP.
+
+    IF lt_and IS INITIAL.
+      result = `1 = 1`.
     ELSE.
-      lv_where = `1 = 1`.
+      result = concat_lines_of( table = lt_and sep = ` AND ` ).
     ENDIF.
 
-    " Max hits
+  ENDMETHOD.
+
+
+  METHOD count_entries.
+
+    CLEAR mv_message.
+
+    IF mv_table_name IS INITIAL.
+      mv_message      = `Enter a table name.`.
+      mv_message_type = `Error`.
+      RETURN.
+    ENDIF.
+
+    " Exactly the same WHERE clause as Execute, so that the number of entries
+    " always matches the result list.
+    crit_from_fields( ).
+    DATA(lv_where) = build_where( ).
+    DATA lv_count TYPE i.
+
+    TRY.
+        SELECT COUNT(*) FROM (mv_table_name) WHERE (lv_where) INTO @lv_count.
+        mv_message      = |Number of entries: { lv_count }|.
+        mv_message_type = `Success`.
+      CATCH cx_root INTO DATA(lx).
+        mv_message      = |Number of entries could not be determined: { lx->get_text( ) }|.
+        mv_message_type = `Error`.
+    ENDTRY.
+
+  ENDMETHOD.
+
+
+  METHOD execute_query.
+
+    DATA: lr_data TYPE REF TO data,
+          lv_max  TYPE i.
+
+    CLEAR: mt_rows, mv_message.
+    mv_total_rows = 0.
+
+    crit_from_fields( ).
+    DATA(lv_where) = build_where( ).
+
+    " Maximum number of hits
     TRY.
         lv_max = mv_max_hits.
       CATCH cx_root.
@@ -780,14 +972,13 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
     IF lv_max <= 0. lv_max = c_default_max. ENDIF.
     IF lv_max > c_max_cap. lv_max = c_max_cap. ENDIF.
 
-    " Build ORDER BY
+    " Sort order
     DATA lt_order TYPE STANDARD TABLE OF string.
     LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<sf>) WHERE sort = 'A' OR sort = 'D'.
       APPEND |{ <sf>-fname } { COND #( WHEN <sf>-sort = 'A' THEN `ASCENDING` ELSE `DESCENDING` ) }| TO lt_order.
     ENDLOOP.
     DATA(lv_order) = concat_lines_of( table = lt_order sep = `, ` ).
 
-    " Execute dynamic SELECT
     TRY.
         CREATE DATA lr_data TYPE TABLE OF (mv_table_name).
         ASSIGN lr_data->* TO FIELD-SYMBOL(<lt_data>).
@@ -800,14 +991,14 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
             INTO TABLE @<lt_data> UP TO @lv_max ROWS.
         ENDIF.
       CATCH cx_root INTO DATA(lx).
-        mv_message      = |SELECT failed: { lx->get_text( ) }|.
+        mv_message      = |Selection could not be executed: { lx->get_text( ) }|.
         mv_message_type = `Error`.
         RETURN.
     ENDTRY.
 
     mv_total_rows = lines( <lt_data> ).
 
-    " Map result to fixed-width string structure
+    " Map the result to the fixed-width string structure
     LOOP AT <lt_data> ASSIGNING FIELD-SYMBOL(<ls_row>).
       DATA ls_out TYPE ty_s_row.
       CLEAR ls_out.
@@ -823,7 +1014,7 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
     ENDLOOP.
 
     mv_step         = 3.
-    mv_message      = |{ mv_total_rows } rows retrieved (max { lv_max }).|.
+    mv_message      = |{ mv_total_rows } entries read (maximum { lv_max }).|.
     mv_message_type = COND #( WHEN mv_total_rows = 0 THEN `Warning` ELSE `Success` ).
 
   ENDMETHOD.
@@ -861,65 +1052,79 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD init_dropdowns.
-
-    mt_signs = VALUE #(
-        ( key = `I` text = `Include` )
-        ( key = `E` text = `Exclude` ) ).
-
-    mt_opts = VALUE #(
-        ( key = `EQ` text = `=` )
-        ( key = `NE` text = `<>` )
-        ( key = `BT` text = `Between` )
-        ( key = `GT` text = `>` )
-        ( key = `GE` text = `>=` )
-        ( key = `LT` text = `<` )
-        ( key = `LE` text = `<=` )
-        ( key = `CP` text = `Pattern (*)` ) ).
-
-    mt_sort_opts = VALUE #(
-        ( key = ``  text = `(none)` )
-        ( key = `A` text = `Ascending` )
-        ( key = `D` text = `Descending` ) ).
-
-  ENDMETHOD.
-
-
   METHOD variant_save.
 
+    mv_variant_name = condense( mv_variant_name ).
+
     IF mv_variant_name IS INITIAL.
-      mv_message      = `Please enter a variant name.`.
+      mv_message      = `Enter a variant name.`.
+      mv_message_type = `Error`.
+      RETURN.
+    ENDIF.
+    IF mv_table_name IS INITIAL.
+      mv_message      = `No table selected.`.
       mv_message_type = `Error`.
       RETURN.
     ENDIF.
 
-    " Serialize current criteria + field settings to JSON
-    TYPES: BEGIN OF ty_s_var_data,
-             table_name TYPE string,
-             max_hits   TYPE string,
-             fields     TYPE ty_t_field,
-             criteria   TYPE ty_t_crit,
-           END OF ty_s_var_data.
+    " FIELDS already carries the selection values. CRITERIA is filled as well
+    " so that a variant can still be read by an older version of this app.
+    crit_from_fields( ).
 
-    DATA(ls_data) = VALUE ty_s_var_data(
+    DATA(ls_payload) = VALUE ty_s_variant_data(
         table_name = mv_table_name
         max_hits   = mv_max_hits
         fields     = mt_fields
         criteria   = mt_crit ).
 
-    " Build unique key: user + table + variant name
-    DATA lv_key TYPE indx-srtfd.
-    lv_key = |{ sy-uname }_{ mv_table_name }_{ mv_variant_name }|.
-
-    " Store via EXPORT TO DATABASE
+    DATA lv_json TYPE string.
     TRY.
-        EXPORT data = ls_data TO DATABASE indx(zv) ID lv_key.
-        mv_message      = |Variant "{ mv_variant_name }" saved.|.
-        mv_message_type = `Success`.
-      CATCH cx_root INTO DATA(lx).
-        mv_message      = |Save failed: { lx->get_text( ) }|.
+        lv_json = z2ui5_cl_util=>json_stringify( ls_payload ).
+      CATCH cx_root INTO DATA(lx_json).
+        mv_message      = |Variant could not be serialized: { lx_json->get_text( ) }|.
         mv_message_type = `Error`.
+        RETURN.
     ENDTRY.
+
+    DATA ls_db TYPE zse16n_a2u5_var.
+    DATA lv_tab  TYPE zse16n_a2u5_var-table_name.
+    DATA lv_name TYPE zse16n_a2u5_var-variant_name.
+    lv_tab  = mv_table_name.
+    lv_name = mv_variant_name.
+
+    " Saving under an existing name overwrites that variant
+    SELECT SINGLE variant_id FROM zse16n_a2u5_var
+      WHERE uname        = @sy-uname
+        AND table_name   = @lv_tab
+        AND variant_name = @lv_name
+      INTO @ls_db-variant_id.
+    IF sy-subrc <> 0.
+      TRY.
+          ls_db-variant_id = cl_system_uuid=>create_uuid_c32_static( ).
+        CATCH cx_uuid_error.
+          ls_db-variant_id = |{ sy-datum }{ sy-uzeit }{ sy-tabix }|.
+      ENDTRY.
+    ENDIF.
+
+    ls_db-uname        = sy-uname.
+    ls_db-table_name   = lv_tab.
+    ls_db-variant_name = lv_name.
+    ls_db-json_data    = lv_json.
+    GET TIME STAMP FIELD ls_db-created_at.
+
+    MODIFY zse16n_a2u5_var FROM @ls_db.
+    IF sy-subrc = 0.
+      " The abap2UI5 request handler rolls back every non-sticky LUW after the
+      " round trip, so the variant has to be committed explicitly.
+      COMMIT WORK AND WAIT.
+      mv_variant_sel  = CONV string( ls_db-variant_id ).
+      mv_message      = |Variant { mv_variant_name } saved.|.
+      mv_message_type = `Success`.
+    ELSE.
+      ROLLBACK WORK.
+      mv_message      = |Variant { mv_variant_name } could not be saved.|.
+      mv_message_type = `Error`.
+    ENDIF.
 
     variant_list_refresh( ).
 
@@ -932,31 +1137,57 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    TYPES: BEGIN OF ty_s_var_data,
-             table_name TYPE string,
-             max_hits   TYPE string,
-             fields     TYPE ty_t_field,
-             criteria   TYPE ty_t_crit,
-           END OF ty_s_var_data.
-
-    DATA ls_data TYPE ty_s_var_data.
-    DATA lv_id TYPE indx-srtfd.
+    DATA lv_id TYPE zse16n_a2u5_var-variant_id.
     lv_id = iv_id.
 
+    SELECT SINGLE variant_name, json_data FROM zse16n_a2u5_var
+      WHERE variant_id = @lv_id
+        AND uname      = @sy-uname
+      INTO @DATA(ls_db).
+    IF sy-subrc <> 0.
+      mv_message      = `Variant does not exist.`.
+      mv_message_type = `Error`.
+      RETURN.
+    ENDIF.
+
+    DATA ls_payload TYPE ty_s_variant_data.
     TRY.
-        IMPORT data = ls_data FROM DATABASE indx(zv) ID lv_id.
-        IF ls_data-table_name IS NOT INITIAL.
-          mv_table_name = ls_data-table_name.
-          mv_max_hits   = ls_data-max_hits.
-          mt_fields     = ls_data-fields.
-          mt_crit       = ls_data-criteria.
-          mv_message      = |Variant loaded.|.
-          mv_message_type = `Success`.
-        ENDIF.
+        z2ui5_cl_util=>json_parse(
+          EXPORTING val  = ls_db-json_data
+          CHANGING  data = ls_payload ).
       CATCH cx_root INTO DATA(lx).
-        mv_message      = |Load failed: { lx->get_text( ) }|.
+        mv_message      = |Variant could not be read: { lx->get_text( ) }|.
         mv_message_type = `Error`.
+        RETURN.
     ENDTRY.
+
+    IF ls_payload-table_name IS INITIAL.
+      mv_message      = `Variant contains no data.`.
+      mv_message_type = `Warning`.
+      RETURN.
+    ENDIF.
+
+    mv_table_name   = ls_payload-table_name.
+    mv_max_hits     = ls_payload-max_hits.
+    mt_fields       = ls_payload-fields.
+    mt_crit         = ls_payload-criteria.
+
+    " Variants saved before the selection values moved into the field lines
+    " carry their values in CRITERIA - move them over so they stay visible.
+    LOOP AT mt_crit ASSIGNING FIELD-SYMBOL(<vc>) WHERE fname IS NOT INITIAL.
+      ASSIGN mt_fields[ fname = <vc>-fname ] TO FIELD-SYMBOL(<vf>).
+      IF sy-subrc <> 0 OR ( <vf>-low IS NOT INITIAL OR <vf>-high IS NOT INITIAL ).
+        CONTINUE.
+      ENDIF.
+      <vf>-opt  = <vc>-opt.
+      <vf>-low  = <vc>-low.
+      <vf>-high = <vc>-high.
+    ENDLOOP.
+    mv_variant_name = CONV string( ls_db-variant_name ).
+    CLEAR: mt_rows, mv_total_rows.
+    mv_step         = 2.
+    mv_message      = |Variant { mv_variant_name } loaded.|.
+    mv_message_type = `Success`.
 
   ENDMETHOD.
 
@@ -964,14 +1195,28 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
   METHOD variant_delete.
 
     IF iv_id IS INITIAL.
+      mv_message      = `Choose a variant first.`.
+      mv_message_type = `Warning`.
       RETURN.
     ENDIF.
 
-    DATA lv_id TYPE indx-srtfd.
+    DATA lv_id TYPE zse16n_a2u5_var-variant_id.
     lv_id = iv_id.
-    DELETE FROM DATABASE indx(zv) ID lv_id.
-    mv_message      = `Variant deleted.`.
-    mv_message_type = `Success`.
+
+    DELETE FROM zse16n_a2u5_var
+      WHERE variant_id = @lv_id
+        AND uname      = @sy-uname.
+    IF sy-subrc = 0.
+      COMMIT WORK AND WAIT.
+      mv_message      = `Variant deleted.`.
+      mv_message_type = `Success`.
+      CLEAR mv_variant_sel.
+    ELSE.
+      ROLLBACK WORK.
+      mv_message      = `Variant does not exist.`.
+      mv_message_type = `Error`.
+    ENDIF.
+
     variant_list_refresh( ).
 
   ENDMETHOD.
@@ -981,28 +1226,24 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
     CLEAR mt_variant_list.
 
-    " Read all variants for current user + table from INDX
-    DATA(lv_pattern) = |{ sy-uname }_{ mv_table_name }%|.
+    IF mv_table_name IS INITIAL.
+      RETURN.
+    ENDIF.
 
-    SELECT srtfd
-      FROM indx
-      WHERE relid = 'ZV'
-        AND srtfd LIKE @lv_pattern
-      INTO TABLE @DATA(lt_keys).
+    DATA lv_tab TYPE zse16n_a2u5_var-table_name.
+    lv_tab = mv_table_name.
 
-    DATA(lv_prefix_len) = strlen( |{ sy-uname }_{ mv_table_name }_| ).
+    SELECT variant_id, variant_name
+      FROM zse16n_a2u5_var
+      WHERE uname      = @sy-uname
+        AND table_name = @lv_tab
+      ORDER BY variant_name
+      INTO TABLE @DATA(lt_db).
 
-    LOOP AT lt_keys ASSIGNING FIELD-SYMBOL(<k>).
-      DATA(lv_srtfd) = CONV string( <k>-srtfd ).
-      DATA lv_vname TYPE string.
-      IF strlen( lv_srtfd ) > lv_prefix_len.
-        lv_vname = lv_srtfd+lv_prefix_len.
-      ELSE.
-        lv_vname = lv_srtfd.
-      ENDIF.
+    LOOP AT lt_db ASSIGNING FIELD-SYMBOL(<db>).
       APPEND VALUE #(
-          id   = lv_srtfd
-          name = lv_vname
+          id   = <db>-variant_id
+          name = <db>-variant_name
       ) TO mt_variant_list.
     ENDLOOP.
 

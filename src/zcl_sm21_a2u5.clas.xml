@@ -3,13 +3,14 @@
  <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
   <asx:values>
    <VSEOCLASS>
-    <CLSNAME>ZCL_SE80_API</CLSNAME>
+    <CLSNAME>ZCL_SM21_A2U5</CLSNAME>
     <LANGU>E</LANGU>
-    <DESCRIPT>Object Navigator - Repository API</DESCRIPT>
+    <DESCRIPT>System Log (abap2UI5)</DESCRIPT>
     <STATE>1</STATE>
     <CLSCCINCL>X</CLSCCINCL>
     <FIXPT>X</FIXPT>
     <UNICODE>X</UNICODE>
+    <WITH_UNIT_TESTS>X</WITH_UNIT_TESTS>
    </VSEOCLASS>
   </asx:values>
  </asx:abap>
