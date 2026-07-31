@@ -111,14 +111,15 @@ CLASS zcl_se80_ui IMPLEMENTATION.
     CASE lv_event.
       WHEN 'TREE_CLICK'.
         IF lines( lt_arg ) >= 2.
-          IF lt_arg[ 2 ] = 'DEVC'.
+          DATA(lv_node_type) = lt_arg[ 2 ].
+          IF lv_node_type = 'DEVC'.
             mv_cur_package = lt_arg[ 1 ].
             mt_tree = mo_api->get_package_tree( mv_cur_package ).
             mt_props = mo_api->get_package_info( mv_cur_package ).
             mv_object_title = |Package { mv_cur_package }|.
             mv_active_tab = 'INFO'.
             CLEAR: mv_source, mv_source_local, mv_source_test, mv_cur_obj_name, mt_methods, mt_fields.
-          ELSEIF lt_arg[ 2 ] = 'METH'.
+          ELSEIF lv_node_type = 'METH'.
             " Method clicked - navigate to class and show signature
             DATA(lv_meth_key) = lt_arg[ 1 ].
             SPLIT lv_meth_key AT '=>' INTO DATA(lv_cls) DATA(lv_mtd).
@@ -148,7 +149,7 @@ CLASS zcl_se80_ui IMPLEMENTATION.
             mv_active_tab = 'INFO'.
           ELSE.
             mv_cur_obj_name = lt_arg[ 1 ].
-            mv_cur_obj_type = lt_arg[ 2 ].
+            mv_cur_obj_type = lv_node_type.
             load_object( ).
           ENDIF.
         ENDIF.
