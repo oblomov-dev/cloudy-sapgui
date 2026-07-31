@@ -45,10 +45,8 @@ CLASS zcl_sapgui_a2ui5 DEFINITION PUBLIC.
     CONSTANTS c_area_menu TYPE string VALUE `S000`.
     CONSTANTS c_max_depth TYPE i VALUE 12.
 
-    " Colours of the classic SAP GUI toolbar icons
-    CONSTANTS c_col_green  TYPE string VALUE `#107e3e`.
-    CONSTANTS c_col_yellow TYPE string VALUE `#e9730c`.
-    CONSTANTS c_col_red    TYPE string VALUE `#bb0000`.
+    " Colours of the classic SAP GUI toolbar icons - the full palette lives
+    " in ZCL_ZLK05_GUI_FRAME, only the colours used on this screen are here
     CONSTANTS c_col_blue   TYPE string VALUE `#0a6ed1`.
     CONSTANTS c_col_grey   TYPE string VALUE `#6a6d70`.
     CONSTANTS c_col_gold   TYPE string VALUE `#e9a800`.

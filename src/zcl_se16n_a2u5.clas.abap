@@ -256,9 +256,12 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
 
       WHEN OTHERS.
         CASE mv_step.
-          WHEN 3.     view_step_3( ).
-          WHEN 2.     view_step_2( ).
-          WHEN OTHERS. view_step_1( ).
+          WHEN 3.
+            view_step_3( ).
+          WHEN 2.
+            view_step_2( ).
+          WHEN OTHERS.
+            view_step_1( ).
         ENDCASE.
 
     ENDCASE.
@@ -969,8 +972,12 @@ CLASS zcl_se16n_a2u5 IMPLEMENTATION.
       CATCH cx_root.
         lv_max = c_default_max.
     ENDTRY.
-    IF lv_max <= 0. lv_max = c_default_max. ENDIF.
-    IF lv_max > c_max_cap. lv_max = c_max_cap. ENDIF.
+    IF lv_max <= 0.
+      lv_max = c_default_max.
+    ENDIF.
+    IF lv_max > c_max_cap.
+      lv_max = c_max_cap.
+    ENDIF.
 
     " Sort order
     DATA lt_order TYPE STANDARD TABLE OF string.

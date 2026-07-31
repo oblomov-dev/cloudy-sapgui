@@ -772,13 +772,13 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     IF to_upper( iv_kind ) = 'DTEL'.
 
-      SELECT FROM dd04l AS d
+      SELECT d~rollname, d~datatype, d~leng, d~as4user, d~as4date,
+             t~ddtext
+        FROM dd04l AS d
         LEFT OUTER JOIN dd04t AS t
           ON  t~rollname   = d~rollname
           AND t~ddlanguage = @sy-langu
           AND t~as4local   = 'A'
-        FIELDS d~rollname, d~datatype, d~leng, d~as4user, d~as4date,
-               t~ddtext
         WHERE d~rollname LIKE @lv_like
           AND d~as4local = 'A'
         ORDER BY d~rollname
@@ -796,12 +796,12 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     ELSE.
 
-      SELECT FROM dd02l AS d
+      SELECT d~tabname, d~tabclass, d~as4user, d~as4date, t~ddtext
+        FROM dd02l AS d
         LEFT OUTER JOIN dd02t AS t
           ON  t~tabname    = d~tabname
           AND t~ddlanguage = @sy-langu
           AND t~as4local   = 'A'
-        FIELDS d~tabname, d~tabclass, d~as4user, d~as4date, t~ddtext
         WHERE d~tabname LIKE @lv_like
           AND d~as4local = 'A'
         ORDER BY d~tabname
@@ -825,13 +825,13 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_tab) = CONV tabname( to_upper( condense( iv_tabname ) ) ).
 
-    SELECT FROM dd03l AS f
+    SELECT f~position, f~fieldname, f~keyflag, f~rollname,
+           f~datatype, f~leng, f~decimals, t~ddtext
+      FROM dd03l AS f
       LEFT OUTER JOIN dd04t AS t
         ON  t~rollname   = f~rollname
         AND t~ddlanguage = @sy-langu
         AND t~as4local   = 'A'
-      FIELDS f~position, f~fieldname, f~keyflag, f~rollname,
-             f~datatype, f~leng, f~decimals, t~ddtext
       WHERE f~tabname    = @lv_tab
         AND f~as4local   = 'A'
         AND f~fieldname NOT LIKE '.%'
@@ -897,11 +897,11 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_like) = to_like_pattern( iv_pattern ).
 
-    SELECT FROM seoclass AS c
+    SELECT c~clsname, c~clstype, t~descript
+      FROM seoclass AS c
       LEFT OUTER JOIN seoclasstx AS t
         ON  t~clsname = c~clsname
         AND t~langu   = @sy-langu
-      FIELDS c~clsname, c~clstype, t~descript
       WHERE c~clsname LIKE @lv_like
       ORDER BY c~clsname
       INTO TABLE @DATA(lt_cls)
@@ -920,12 +920,12 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_cls) = CONV seoclsname( to_upper( condense( iv_clsname ) ) ).
 
-    SELECT FROM seocompo AS c
+    SELECT c~cmpname, c~cmptype, c~mtdtype, d~exposure, d~redefin
+      FROM seocompo AS c
       LEFT OUTER JOIN seocompodf AS d
         ON  d~clsname = c~clsname
         AND d~cmpname = c~cmpname
         AND d~version = '1'
-      FIELDS c~cmpname, c~cmptype, c~mtdtype, d~exposure, d~redefin
       WHERE c~clsname = @lv_cls
       ORDER BY c~cmptype, c~cmpname
       INTO TABLE @DATA(lt_cmp).
@@ -960,13 +960,13 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_like) = to_like_pattern( iv_pattern ).
 
-    SELECT FROM tfdir AS f
+    SELECT f~funcname, f~fmode, e~area, t~stext
+      FROM tfdir AS f
       LEFT OUTER JOIN enlfdir AS e
         ON e~funcname = f~funcname
       LEFT OUTER JOIN tftit AS t
         ON  t~funcname = f~funcname
         AND t~spras    = @sy-langu
-      FIELDS f~funcname, f~fmode, e~area, t~stext
       WHERE f~funcname LIKE @lv_like
       ORDER BY f~funcname
       INTO TABLE @DATA(lt_fm)
@@ -1022,12 +1022,12 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_like) = to_like_pattern( iv_pattern ).
 
-    SELECT FROM trdir AS d
+    SELECT d~name, d~subc, d~cnam, d~udat, a~devclass
+      FROM trdir AS d
       LEFT OUTER JOIN tadir AS a
         ON  a~pgmid    = 'R3TR'
         AND a~object   = 'PROG'
         AND a~obj_name = d~name
-      FIELDS d~name, d~subc, d~cnam, d~udat, a~devclass
       WHERE d~name LIKE @lv_like
       ORDER BY d~name
       INTO TABLE @DATA(lt_prog)
@@ -1294,14 +1294,14 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     DATA(lv_like) = to_like_pattern( iv_pattern ).
 
-    SELECT FROM usr02 AS u
+    SELECT u~bname, u~ustyp, u~uflag, u~gltgv, u~gltgb,
+           u~trdat, u~aname, a~name_first, a~name_last
+      FROM usr02 AS u
       LEFT OUTER JOIN usr21 AS p
         ON p~bname = u~bname
       LEFT OUTER JOIN adrp AS a
         ON  a~persnumber = p~persnumber
         AND a~nation     = @space
-      FIELDS u~bname, u~ustyp, u~uflag, u~gltgv, u~gltgb,
-             u~trdat, u~aname, a~name_first, a~name_last
       WHERE u~bname LIKE @lv_like
       ORDER BY u~bname
       INTO TABLE @DATA(lt_users)
@@ -1593,12 +1593,12 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
     DATA(lv_user) = to_like_pattern( iv_user ).
     DATA(lv_stat) = CONV trstatus( to_upper( condense( iv_status ) ) ).
 
-    SELECT FROM e070 AS h
+    SELECT h~trkorr, h~trfunction, h~trstatus, h~tarsystem,
+           h~as4user, h~as4date, h~as4time, h~strkorr, t~as4text
+      FROM e070 AS h
       LEFT OUTER JOIN e07t AS t
         ON  t~trkorr = h~trkorr
         AND t~langu  = @sy-langu
-      FIELDS h~trkorr, h~trfunction, h~trstatus, h~tarsystem,
-             h~as4user, h~as4date, h~as4time, h~strkorr, t~as4text
       WHERE h~as4user LIKE @lv_user
         AND ( h~trstatus = @lv_stat OR @lv_stat = '' )
       ORDER BY h~as4date DESCENDING, h~as4time DESCENDING
@@ -1714,7 +1714,7 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
 
     LOOP AT lt_meta ASSIGNING FIELD-SYMBOL(<m>).
 
-      IF NOT to_upper( <m>-name ) CP lv_pattern.
+      IF to_upper( <m>-name ) NP lv_pattern.
         CONTINUE.
       ENDIF.
 
@@ -1985,19 +1985,18 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
     es_state-state_known = abap_true.
 
     " the trace type flags sit in the named sub structure TRACE_TYPES
-    es_state-sql_on  = COND #( WHEN ls_raw-trace_types-sql_on  IS NOT INITIAL THEN abap_true ).
-    es_state-buf_on  = COND #( WHEN ls_raw-trace_types-buf_on  IS NOT INITIAL THEN abap_true ).
-    es_state-enq_on  = COND #( WHEN ls_raw-trace_types-enq_on  IS NOT INITIAL THEN abap_true ).
-    es_state-rfc_on  = COND #( WHEN ls_raw-trace_types-rfc_on  IS NOT INITIAL THEN abap_true ).
-    es_state-http_on = COND #( WHEN ls_raw-trace_types-http_on IS NOT INITIAL THEN abap_true ).
-    es_state-amc_on  = COND #( WHEN ls_raw-trace_types-amc_on  IS NOT INITIAL THEN abap_true ).
-    es_state-apc_on  = COND #( WHEN ls_raw-trace_types-apc_on  IS NOT INITIAL THEN abap_true ).
-    es_state-auth_on = COND #( WHEN ls_raw-trace_types-auth_on IS NOT INITIAL THEN abap_true ).
-    es_state-stack_on     = COND #( WHEN ls_raw-stack_trace_on IS NOT INITIAL THEN abap_true ).
-    es_state-progress_on  = COND #( WHEN ls_raw-progress_indicator_on IS NOT INITIAL THEN abap_true ).
-    es_state-filter_on    = COND #( WHEN ls_raw-filter_on IS NOT INITIAL THEN abap_true ).
-    es_state-incl_missing = COND #( WHEN ls_raw-include_missing_table_name_on IS NOT INITIAL
-                                    THEN abap_true ).
+    es_state-sql_on  = xsdbool( ls_raw-trace_types-sql_on  IS NOT INITIAL ).
+    es_state-buf_on  = xsdbool( ls_raw-trace_types-buf_on  IS NOT INITIAL ).
+    es_state-enq_on  = xsdbool( ls_raw-trace_types-enq_on  IS NOT INITIAL ).
+    es_state-rfc_on  = xsdbool( ls_raw-trace_types-rfc_on  IS NOT INITIAL ).
+    es_state-http_on = xsdbool( ls_raw-trace_types-http_on IS NOT INITIAL ).
+    es_state-amc_on  = xsdbool( ls_raw-trace_types-amc_on  IS NOT INITIAL ).
+    es_state-apc_on  = xsdbool( ls_raw-trace_types-apc_on  IS NOT INITIAL ).
+    es_state-auth_on = xsdbool( ls_raw-trace_types-auth_on IS NOT INITIAL ).
+    es_state-stack_on     = xsdbool( ls_raw-stack_trace_on IS NOT INITIAL ).
+    es_state-progress_on  = xsdbool( ls_raw-progress_indicator_on IS NOT INITIAL ).
+    es_state-filter_on    = xsdbool( ls_raw-filter_on IS NOT INITIAL ).
+    es_state-incl_missing = xsdbool( ls_raw-include_missing_table_name_on IS NOT INITIAL ).
 
     es_state-trace_user   = ls_raw-trace_user.
     es_state-tcode        = ls_raw-transaction_code.
@@ -2025,13 +2024,27 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
     " which trace types are recording right now?
     DATA lt_active TYPE string_table.
 
-    IF es_state-sql_on  = abap_true. APPEND `SQL Trace`     TO lt_active. ENDIF.
-    IF es_state-buf_on  = abap_true. APPEND `Buffer Trace`  TO lt_active. ENDIF.
-    IF es_state-enq_on  = abap_true. APPEND `Enqueue Trace` TO lt_active. ENDIF.
-    IF es_state-rfc_on  = abap_true. APPEND `RFC Trace`     TO lt_active. ENDIF.
-    IF es_state-http_on = abap_true. APPEND `HTTP Trace`    TO lt_active. ENDIF.
-    IF es_state-amc_on  = abap_true. APPEND `AMC Trace`     TO lt_active. ENDIF.
-    IF es_state-apc_on  = abap_true. APPEND `APC trace`     TO lt_active. ENDIF.
+    IF es_state-sql_on = abap_true.
+      APPEND `SQL Trace` TO lt_active.
+    ENDIF.
+    IF es_state-buf_on = abap_true.
+      APPEND `Buffer Trace` TO lt_active.
+    ENDIF.
+    IF es_state-enq_on = abap_true.
+      APPEND `Enqueue Trace` TO lt_active.
+    ENDIF.
+    IF es_state-rfc_on = abap_true.
+      APPEND `RFC Trace` TO lt_active.
+    ENDIF.
+    IF es_state-http_on = abap_true.
+      APPEND `HTTP Trace` TO lt_active.
+    ENDIF.
+    IF es_state-amc_on = abap_true.
+      APPEND `AMC Trace` TO lt_active.
+    ENDIF.
+    IF es_state-apc_on = abap_true.
+      APPEND `APC trace` TO lt_active.
+    ENDIF.
 
     IF lt_active IS INITIAL.
       es_state-any_on     = abap_false.
@@ -2185,7 +2198,7 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    SELECT SINGLE @abap_true FROM tstc INTO @result WHERE tcode = @lv_tcode.
+    SELECT SINGLE @abap_true FROM tstc WHERE tcode = @lv_tcode INTO @result.
 
   ENDMETHOD.
 
@@ -2196,8 +2209,9 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    SELECT SINGLE ttext FROM tstct INTO @result
-      WHERE sprsl = 'E' AND tcode = @lv_tcode.
+    SELECT SINGLE ttext FROM tstct
+      WHERE sprsl = 'E' AND tcode = @lv_tcode
+      INTO @result ##SUBRC_OK.
 
   ENDMETHOD.
 

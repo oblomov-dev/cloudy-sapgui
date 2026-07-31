@@ -1,0 +1,250 @@
+{
+  "global": {
+    "files": "/src/**/*.*"
+  },
+  "dependencies": [
+    {
+      "url": "https://github.com/abap2UI5/abap2UI5",
+      "folder": "/deps/abap2ui5",
+      "files": "/src/**/*.*"
+    },
+    {
+      "url": "https://github.com/abap2UI5/ai-demokit",
+      "folder": "/deps/ai-demokit",
+      "files": "/src/z2ui5_cl_ai_xml.clas.*"
+    },
+    {
+      "url": "https://github.com/abapedia/steampunk-2305-api-intersect-702",
+      "folder": "/deps/steampunk",
+      "files": "/src/**/*.*"
+    }
+  ],
+  "syntax": {
+    "version": "v750",
+    "errorNamespace": "^(Z|Y)",
+    // constants of type pools that the dependencies above do not carry
+    "globalConstants": [
+      "seok_access_modify"
+    ]
+  },
+  "rules": {
+    "7bit_ascii": true,
+    "allowed_object_naming": true,
+    "allowed_object_types": {
+      "allowed": [
+        "CLAS",
+        "DEVC",
+        "INTF",
+        "TABL"
+      ]
+    },
+    "ambiguous_statement": true,
+    "avoid_use": {
+      "define": true,
+      "statics": true,
+      "defaultKey": true,
+      "break": true,
+      "testSeams": true,
+      "describeLines": true,
+      "exportToMemory": true,
+      "exportToDatabase": true
+    },
+    "begin_end_names": true,
+    "call_transaction_authority_check": true,
+    "catch_and_raise": true,
+    "chain_mainly_declarations": true,
+    "check_abstract": true,
+    "check_comments": {
+      "allowEndOfLine": true
+    },
+    "check_ddic": true,
+    "check_include": true,
+    // SELECT ... INTO TABLE is always followed by a LOOP or an IS INITIAL
+    // check here, and ASSIGN is always followed by IS ASSIGNED
+    "check_subrc": {
+      "openDataset": true,
+      "authorityCheck": true,
+      "selectSingle": true,
+      "selectTable": false,
+      "updateDatabase": true,
+      "insertDatabase": true,
+      "modifyDatabase": true,
+      "deleteDatabase": true,
+      "readTable": true,
+      "assign": false,
+      "find": true
+    },
+    "check_syntax": true,
+    "check_text_elements": true,
+    "check_transformation_exists": true,
+    "classic_exceptions_overlap": true,
+    "colon_missing_space": true,
+    "constructor_visibility_public": true,
+    "contains_tab": true,
+    // This repository rebuilds the ABAP Workbench, so INSERT REPORT (SE38 /
+    // SE80 source save) and dynamic SQL (SE16N table browser) are the
+    // feature, not an accident. Everything else stays forbidden.
+    "dangerous_statement": {
+      "insertTextpool": true,
+      "execSQL": true,
+      "kernelCall": true,
+      "systemCall": true,
+      "insertReport": false,
+      "generateDynpro": true,
+      "generateReport": true,
+      "generateSubroutine": true,
+      "deleteReport": true,
+      "deleteTextpool": true,
+      "deleteDynpro": true,
+      "exportDynpro": true,
+      "editorCallForReport": true,
+      "dynamicSQL": false
+    },
+    "description_empty": true,
+    "double_space": false,
+    "downport": true,
+    "dynpro_checks": true,
+    "empty_event": true,
+    "empty_statement": true,
+    "empty_structure": {
+      "loop": false,
+      "if": true,
+      "while": true,
+      "case": true,
+      "select": true,
+      "do": true,
+      "at": true,
+      "try": true,
+      "when": false
+    },
+    "exit_or_check": true,
+    "expand_macros": true,
+    "exporting": true,
+    "forbidden_identifier": true,
+    "form_tables_obsolete": true,
+    "fully_type_constants": {
+      "checkData": true
+    },
+    "functional_writing": {
+      "ignoreExceptions": true
+    },
+    "global_class": true,
+    "identical_conditions": true,
+    "identical_descriptions": true,
+    "identical_form_names": true,
+    "identical_move": true,
+    "implement_methods": true,
+    "implicit_start_of_selection": true,
+    "invalid_table_index": true,
+    "keyword_case": false,
+    "line_break_style": true,
+    "line_length": false,
+    "local_testclass_consistency": true,
+    "macro_naming": true,
+    "main_file_contents": true,
+    "max_one_statement": true,
+    "message_exists": true,
+    "method_implemented_twice": true,
+    "method_overwrites_builtin": true,
+    "mix_returning": true,
+    "modify_only_own_db_tables": {
+      "reportDynamic": true,
+      "ownTables": "^[yz]"
+    },
+    "names_no_dash": true,
+    "nesting": {
+      "depth": 6
+    },
+    "newline_between_methods": true,
+    "no_aliases": true,
+    "no_chained_assignment": true,
+    "no_external_form_calls": true,
+    "no_yoda_conditions": {
+      "onlyConstants": true
+    },
+    "object_naming": {
+      "patternKind": "required",
+      "clas": "^Z",
+      "intf": "^Z",
+      "prog": "^Z",
+      "fugr": "^Z",
+      "tabl": "^Z",
+      "ttyp": "^Z",
+      "dtel": "^Z",
+      "doma": "^Z",
+      "msag": "^Z",
+      "tran": "^Z",
+      "enqu": "^EZ",
+      "auth": "^Z",
+      "pinf": "^Z",
+      "idoc": "^Z",
+      "xslt": "^Z",
+      "ssfo": "^Z",
+      "ssst": "^Z",
+      "shlp": "^Z"
+    },
+    "obsolete_statement": true,
+    "omit_parameter_name": true,
+    "omit_preceding_zeros": true,
+    "omit_receiving": true,
+    "parser_702_chaining": true,
+    "parser_bad_exceptions": true,
+    "parser_error": true,
+    "parser_missing_space": true,
+    "pragma_style": true,
+    "prefer_is_not": true,
+    "prefer_raise_exception_new": true,
+    "prefer_returning_to_exporting": true,
+    "prefer_xsdbool": true,
+    "preferred_compare_operator": true,
+    "reduce_string_templates": true,
+    "remove_descriptions": {
+      "ignoreExceptions": false,
+      "ignoreWorkflow": false
+    },
+    "rfc_error_handling": true,
+    // the table browsers select from a table name only known at runtime,
+    // so neither a column list nor a static ORDER BY is possible
+    "select_add_order_by": false,
+    "select_performance": {
+      "endSelect": true,
+      "selectStar": false
+    },
+    "selection_screen_naming": true,
+    "short_case": true,
+    "space_before_colon": true,
+    "sql_escape_host_variables": true,
+    "static_call_via_instance": true,
+    "superclass_final": true,
+    "superfluous_value": true,
+    "sy_modification": true,
+    "tabl_enhancement_category": true,
+    "tables_declared_locally": true,
+    "try_without_catch": true,
+    "type_form_parameters": true,
+    "uncaught_exception": true,
+    "unknown_types": true,
+    "unnecessary_chaining": true,
+    "unnecessary_pragma": true,
+    "unnecessary_return": true,
+    "unreachable_code": true,
+    "unsecure_fae": true,
+    "unused_ddic": true,
+    "unused_macros": true,
+    "unused_types": true,
+    "unused_variables": {
+      "severity": "Error",
+      "skipNames": [
+        "lv_dummy",
+        "<dummy>"
+      ]
+    },
+    "use_bool_expression": true,
+    "use_class_based_exceptions": true,
+    "use_line_exists": true,
+    "use_new": true,
+    "when_others_last": true,
+    "whitespace_end": true,
+    "xml_consistency": true
+  }
+}
