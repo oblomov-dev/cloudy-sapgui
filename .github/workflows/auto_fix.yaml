@@ -1,0 +1,36 @@
+name: auto_fix
+
+# Applies the abaplint quick fixes that are safe to run unattended and
+# opens a pull request with the result.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  auto_fix:
+    if: github.repository == 'oblomov-dev/cloudy-sapgui'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run auto_fix
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          title: 'abaplint auto fixes'
+          branch: abaplint-auto-fixes
+          commit-message: 'Apply abaplint quick fixes'

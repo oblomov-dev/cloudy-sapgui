@@ -10,9 +10,9 @@
     "lint_702": "abaplint .github/abaplint/abap_702.jsonc",
     "syfixes": "find src -type f -name '*.abap' -exec sed -i -e 's/ RAISE EXCEPTION TYPE cx_sy_itab_line_not_found/ ASSERT 1 = 0/g' {} +",
     "strip_trailing_ws": "find src -type f -name '*.abap' -exec sed -i 's/[[:space:]]\\+$//' {} +",
-    "abaplintpathfix": "sed -i 's|\"files\": \"/\\.\\.\\/\\.\\.\\/src\\/\\*\\*\\/\\*\\.\\*\"|\"files\": \"/src/**/*.*\"|g' abaplint.jsonc",
-    "auto_downport": "abaplint .github/abaplint/abap_702.jsonc --fix && npm run syfixes && npm run strip_trailing_ws && cp -f .github/abaplint/abap_702.jsonc abaplint.jsonc && npm run abaplintpathfix",
-    "test": "npm run lint"
+    "auto_fix": "abaplint .github/abaplint/auto_fix.jsonc --fix",
+    "auto_downport": "abaplint .github/abaplint/abap_702.jsonc --fix && npm run syfixes && npm run strip_trailing_ws",
+    "test": "npm run lint && npm run lint_standard"
   },
   "repository": {
     "type": "git",
