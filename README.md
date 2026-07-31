@@ -160,14 +160,15 @@ the `auto_downport` workflow pushes the result to a `702` branch that
 not run on every push - it must not force push a broken branch. What abaplint
 cannot rewrite today:
 
-- `SELECT` with a `LEFT OUTER JOIN`: the generated statement puts `INTO TABLE`
-  before the `WHERE` clause, which does not parse. Nine selects in
-  `ZCL_ZLK05_SYS_API` are affected.
+- `SELECT` with a `LEFT OUTER JOIN`: the statement keeps its strict SQL form,
+  the comma separated column list and the `@` escaped host variables, none of
+  which parse on 7.02. Selects without a join are rewritten correctly. Nine
+  selects in `ZCL_ZLK05_SYS_API` are affected.
 - `COND` nested inside a `VALUE` constructor: the outer constructor is expanded
   but the inner `COND` is left as it is, mostly in `ZCL_SE16N_A2U5`.
 - `DATA(x) = <call on a class abaplint cannot resolve>`: without the type the
-  inline declaration cannot be split, mostly the `CL_OO_CLIF_SOURCE` calls in
-  `ZCL_SE80_API`.
+  inline declaration cannot be split, so it stays. All 55 findings in
+  `ZCL_SE80_API` come from the `CL_OO_CLIF_SOURCE` calls.
 
 Making the sources downportable means hoisting those expressions and writing
 the joins as separate selects. Until then `npm run lint_702` reports what is
