@@ -2198,7 +2198,7 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    SELECT SINGLE @abap_true FROM tstc INTO @result WHERE tcode = @lv_tcode.
+    SELECT SINGLE @abap_true FROM tstc WHERE tcode = @lv_tcode INTO @result.
 
   ENDMETHOD.
 
@@ -2209,8 +2209,9 @@ CLASS zcl_zlk05_sys_api IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    SELECT SINGLE ttext FROM tstct INTO @result
-      WHERE sprsl = 'E' AND tcode = @lv_tcode ##SUBRC_OK.
+    SELECT SINGLE ttext FROM tstct
+      WHERE sprsl = 'E' AND tcode = @lv_tcode
+      INTO @result ##SUBRC_OK.
 
   ENDMETHOD.
 
